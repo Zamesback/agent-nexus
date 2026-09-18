@@ -56,18 +56,69 @@ def list_projects():
                 try:
                     with open(board_file, "r", encoding="utf-8") as f:
                         board = json.load(f)
+                    tasks = board.get("tasks", [])
+                    msgs = board.get("messages", [])
                     info["project_name"] = board.get("project_info", {}).get("name", name)
                     info["description"] = board.get("project_info", {}).get("description", "")
-                    info["task_count"] = len(board.get("tasks", []))
-                    info["done_count"] = len([t for t in board.get("tasks", []) if t.get("status") == "done"])
-                    info["message_count"] = len(board.get("messages", []))
+                    info["task_count"] = len(tasks)
+                    info["done_count"] = len([t for t in tasks if t.get("status") == "done"])
+                    info["active_count"] = len([t for t in tasks if t.get("status") == "in_progress"])
+                    info["blocked_count"] = len([t for t in tasks if t.get("status") == "blocked"])
+                    info["todo_count"] = len([t for t in tasks if t.get("status") == "todo"])
+                    info["message_count"] = len(msgs)
                     info["agents"] = [a.get("name", a.get("id")) for a in board.get("agents", [])]
+                    info["agent_count"] = len(board.get("agents", []))
+                    info["progress"] = round(info["done_count"] / info["task_count"] * 100) if info["task_count"] else 0
+                    # 最近活动：取最后一条消息时间，否则留空由前端回退到 modified
+                    if msgs:
+                        info["last_active"] = msgs[-1].get("timestamp", "") or ""
+                    else:
+                        info["last_active"] = ""
                 except Exception:
                     pass
+                # 交接/背景文档标记：目录内存在 md 文档
+                try:
+                    files = os.listdir(project_path)
+                    info["has_handoff"] = any(f.lower().endswith(".md") for f in files)
+                except Exception:
+                    info["has_handoff"] = False
                 info["created"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getctime(project_path)))
                 info["modified"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(board_file)))
                 projects.append(info)
     return projects
+
+
+def dashboard_stats():
+    # Dashboard 聚合统计：跨项目指标 + 项目列表
+    projects = list_projects()
+    today = time.strftime("%Y-%m-%d")
+    total_tasks = sum(p.get("task_count", 0) for p in projects)
+    total_done = sum(p.get("done_count", 0) for p in projects)
+    total_messages = sum(p.get("message_count", 0) for p in projects)
+    total_agents = sum(p.get("agent_count", 0) for p in projects)
+    today_messages = 0
+    for p in projects:
+        board_file = os.path.join(p["path"], "collab_board.json")
+        try:
+            with open(board_file, "r", encoding="utf-8") as f:
+                board = json.load(f)
+            today_messages += len([m for m in board.get("messages", [])
+                                   if (m.get("timestamp") or "").startswith(today)])
+        except Exception:
+            pass
+    active_projects = sum(1 for p in projects if p.get("active_count", 0) > 0)
+    return {
+        "project_count": len(projects),
+        "active_projects": active_projects,
+        "total_tasks": total_tasks,
+        "total_done": total_done,
+        "completion": round(total_done / total_tasks * 100) if total_tasks else 0,
+        "total_messages": total_messages,
+        "today_messages": today_messages,
+        "total_agents": total_agents,
+        "projects": projects,
+        "root": PROJECTS_ROOT,
+    }
 
 
 def get_project_path(project_name):
@@ -1707,6 +1758,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 项目列表（多项目管理）
         if parsed.path == "/api/projects":
             self._send_json({"projects": list_projects(), "root": PROJECTS_ROOT})
+            return
+
+        # API: Dashboard 聚合统计（v2.6）
+        if parsed.path == "/api/dashboard":
+            self._send_json(dashboard_stats())
             return
 
         # API: 获取看板数据

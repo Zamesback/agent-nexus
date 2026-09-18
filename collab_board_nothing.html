@@ -11,17 +11,19 @@
   :root {
     --bg: #0b0b0c;
     --bg-2: #0f0f11;
-    --panel: rgba(255,255,255,.035);
-    --panel-2: rgba(255,255,255,.06);
-    --line: rgba(255,255,255,.13);
-    --line-2: rgba(255,255,255,.07);
+    --panel: rgba(var(--panel-rgb,.035);
+    --panel-2: rgba(var(--panel-rgb,.06);
+    --line: rgba(var(--panel-rgb,.13);
+    --line-2: rgba(var(--panel-rgb,.07);
     --text: #f4f4f5;
     --dim: #8d8d92;
     --dim-2: #5f5f65;
     --red: #ff3621;
-    --red-soft: rgba(255,54,33,.16);
-    --red-glow: rgba(255,54,33,.55);
+    --red-soft: rgba(var(--red-rgb,.16);
+    --red-glow: rgba(var(--red-rgb,.55);
     --green: #22c55e;
+    --red-rgb: 255, 54, 33;
+    --panel-rgb: 255, 255, 255;
     --mono: 'VT323', monospace;
     --pixel: 'Silkscreen','VT323',monospace;
     --sans: 'Inter','Noto Sans SC','PingFang SC',-apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif;
@@ -32,9 +34,9 @@
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
     background:
-      radial-gradient(900px 500px at 78% -5%, rgba(255,54,33,.10), transparent 55%),
-      linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px) 0 0/42px 42px,
-      linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px) 0 0/42px 42px,
+      radial-gradient(900px 500px at 78% -5%, rgba(var(--red-rgb,.10), transparent 55%),
+      linear-gradient(rgba(var(--panel-rgb,.022) 1px, transparent 1px) 0 0/42px 42px,
+      linear-gradient(90deg, rgba(var(--panel-rgb,.022) 1px, transparent 1px) 0 0/42px 42px,
       var(--bg);
     background-attachment: fixed;
     color: var(--text);
@@ -255,7 +257,7 @@
   .task-card.selected {
     border-color: var(--red);
     background: var(--red-soft);
-    box-shadow: 0 0 20px rgba(255,54,33,.15);
+    box-shadow: 0 0 20px rgba(var(--red-rgb,.15);
   }
   .task-card.selected::before {
     content: '';
@@ -368,7 +370,7 @@
     max-height: 82vh;
     overflow-y: auto;
     z-index: 100;
-    box-shadow: 0 0 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,.05);
+    box-shadow: 0 0 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(var(--panel-rgb,.05);
     display: none;
   }
   .task-detail.show { display: block; animation: detailIn 0.25s ease-out; }
@@ -512,7 +514,7 @@
   }
   .layout-splitter:hover,
   .layout-splitter.active {
-    background: rgba(255,54,33,.18);
+    background: rgba(var(--red-rgb,.18);
   }
   .layout-splitter::after {
     content: '\u22ee\u22ee';
@@ -874,7 +876,7 @@
   }
   .onboard-step.active .onboard-step-num {
     border-color: var(--red);
-    background: rgba(255,54,33,.15);
+    background: rgba(var(--red-rgb,.15);
     color: var(--red);
   }
   .onboard-step.done .onboard-step-num {
@@ -952,7 +954,7 @@
     border-radius: 3px;
   }
   .onboard-agent-status.online { background: rgba(34,197,94,.15); color: var(--green); }
-  .onboard-agent-status.offline { background: rgba(255,54,33,.1); color: var(--dim-2); }
+  .onboard-agent-status.offline { background: rgba(var(--red-rgb,.1); color: var(--dim-2); }
   .onboard-actions {
     display: flex;
     gap: 10px;
@@ -1003,9 +1005,9 @@
     transition: all 0.2s;
   }
   .onboard-agent-option:last-child { border-bottom: none; }
-  .onboard-agent-option:hover { background: rgba(255,54,33,.05); }
+  .onboard-agent-option:hover { background: rgba(var(--red-rgb,.05); }
   .onboard-agent-option.selected {
-    background: rgba(255,54,33,.1);
+    background: rgba(var(--red-rgb,.1);
     border-left: 3px solid var(--red);
   }
   .onboard-agent-option-info {
@@ -1037,7 +1039,7 @@
   }
   .onboard-agent-option.selected .onboard-agent-option-check {
     border-color: var(--red);
-    background: rgba(255,54,33,.15);
+    background: rgba(var(--red-rgb,.15);
   }
 
   /* ===== 自动触发开关 + AI思考动画（T3.5/T3.6）===== */
@@ -1145,7 +1147,7 @@
     border-color: var(--agent-color);
     color: var(--agent-color);
     background: var(--agent-color);
-    background: rgba(255,54,33,.06);
+    background: rgba(var(--red-rgb,.06);
   }
   .identity-btn .dot {
     width: 5px; height: 5px;
@@ -1171,7 +1173,7 @@
   .chat-input:focus {
     border-color: var(--red);
     background: var(--panel-2);
-    box-shadow: 0 0 12px rgba(255,54,33,.1);
+    box-shadow: 0 0 12px rgba(var(--red-rgb,.1);
   }
   .chat-input::placeholder { color: var(--dim-2); font-family: var(--mono); font-size: 15px; }
   .send-btn {
@@ -1221,7 +1223,7 @@
     max-height: 84vh;
     overflow-y: auto;
     z-index: 100;
-    box-shadow: 0 0 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,.05);
+    box-shadow: 0 0 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(var(--panel-rgb,.05);
     display: none;
   }
   .api-modal.show { display: block; animation: detailIn 0.25s ease-out; }
@@ -1271,7 +1273,7 @@
   .api-form input:focus {
     border-color: var(--red);
     background: var(--panel-2);
-    box-shadow: 0 0 12px rgba(255,54,33,.1);
+    box-shadow: 0 0 12px rgba(var(--red-rgb,.1);
   }
   .api-toggle-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -1386,6 +1388,58 @@
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover { background: var(--dim-2); }
+  /* ===== Apple Light 皮肤（v2.6 皮肤系统）===== */
+  [data-theme="apple"] {
+    --bg: #f5f5f7;
+    --bg-2: #ffffff;
+    --panel-rgb: 0, 0, 0;
+    --panel: rgba(0,0,0,.045);
+    --panel-2: rgba(0,0,0,.08);
+    --line: rgba(0,0,0,.13);
+    --line-2: rgba(0,0,0,.07);
+    --text: #1d1d1f;
+    --dim: #6e6e73;
+    --dim-2: #86868b;
+    --red: #007aff;
+    --red-rgb: 0, 122, 255;
+    --red-soft: rgba(0,122,255,.10);
+    --red-glow: rgba(0,122,255,.30);
+    --green: #34c759;
+    --pixel: 'Inter','Noto Sans SC',-apple-system,BlinkMacSystemFont,sans-serif;
+    --mono: 'SF Mono','Menlo',Consolas,monospace;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+  [data-theme="apple"] body {
+    background: linear-gradient(180deg, #ffffff 0%, #f5f5f7 100%);
+  }
+  [data-theme="apple"] .topbar {
+    background: rgba(255,255,255,.78);
+    border-bottom: 1px solid rgba(0,0,0,.08);
+  }
+  [data-theme="apple"] .msg-body.collapsed::after {
+    background: linear-gradient(transparent, rgba(255,255,255,.96));
+  }
+  [data-theme="apple"] .task-detail,
+  [data-theme="apple"] .cmd-menu-dropdown,
+  [data-theme="apple"] .api-modal {
+    background: #ffffff;
+  }
+  [data-theme="apple"] .task-card.selected {
+    box-shadow: 0 4px 20px rgba(0,122,255,.18);
+  }
+  [data-theme="apple"] .status-btn.active {
+    box-shadow: 0 2px 12px rgba(0,122,255,.25);
+  }
+  [data-theme="apple"] .col-body .col-empty {
+    border-color: rgba(0,0,0,.12);
+  }
+  [data-theme="apple"] input,
+  [data-theme="apple"] textarea {
+    background: #ffffff;
+  }
+  [data-theme="apple"] ::-webkit-scrollbar-track { background: #f5f5f7; }
+  [data-theme="apple"] ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.18); }
 </style>
 </head>
 <body>
@@ -1400,6 +1454,7 @@
     <div class="subtitle" id="project-subtitle">LOADING...</div>
   </div>
   <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色">N // 暗色</button>
     <button class="api-settings-btn" onclick="openApiSettings()">API 设置</button>
     <div class="status-indicator">
       <div class="status-dot"></div>
@@ -1659,6 +1714,7 @@ const STATUS_CONFIG = {
 
 // ===== 初始化 =====
 async function init() {
+  initTheme();
   restoreChatWidth();
   initLayoutSplitter();
   await loadConfig();
@@ -2787,6 +2843,24 @@ function initLayoutSplitter() {
 
 // ===== 启动 =====
 init();
+// ===== 皮肤系统（v2.6）：Nothing / Apple 切换 =====
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('agentnexus_theme', t); } catch (e) {}
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = t === 'apple' ? 'N // 暗色' : 'A // 亮色';
+}
+
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'nothing';
+  applyTheme(cur === 'apple' ? 'nothing' : 'apple');
+}
+
+function initTheme() {
+  let saved = 'nothing';
+  try { saved = localStorage.getItem('agentnexus_theme') || 'nothing'; } catch (e) {}
+  applyTheme(saved);
+}
 </script>
 </body>
 </html>

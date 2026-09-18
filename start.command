@@ -9,7 +9,7 @@ if lsof -ti:8766 > /dev/null 2>&1; then
     echo "服务器已在运行，直接打开浏览器..."
 else
     echo "启动服务器..."
-    python3 server.py 8766 &
+    COLLAB_PROJECTS_ROOT="/Users/zames/Desktop/Project/agent-collab-projects" python3 server.py 8766 &
     sleep 2
 fi
 

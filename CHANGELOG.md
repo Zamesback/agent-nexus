@@ -2,6 +2,36 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.6.0] - 2026-09-18
+
+### New Features
+
+- **Theme System (Skin System)**: Two switchable skins — the original Nothing dark theme and a new Apple Light skin (inspired by Apple / Shimo Docs: clean, simple, high-clarity light UI)
+  - Skin applied via CSS custom properties (`data-theme` on `<html>`); hard-coded colors refactored to theme-aware RGB variables (`--red-rgb`, `--panel-rgb`)
+  - Apple skin uses system fonts (SF/Inter), Apple Blue `#007aff` accent, rounded corners, light gradient background
+  - Theme choice persisted in `localStorage` (`agentnexus_theme`), shared across Dashboard and Board pages
+  - Toggle button in both pages' top bars; architecture ready for more skins (just add another `[data-theme]` block)
+
+- **Home Page upgraded to Dashboard**: `index.html` is now a command center overview instead of a plain project list
+  - Metric cards: total projects, active projects, total tasks, completion rate, total agents, total messages (with today's count)
+  - Enhanced project cards: progress bar + %, task breakdown (done/total, active, blocked), agent chips, last activity time, handoff-document tag, enter button
+  - Auto-refresh every 15 seconds
+
+### Backend
+
+- `list_projects()`: added `active_count`, `blocked_count`, `todo_count`, `agent_count`, `progress`, `last_active`, `has_handoff` fields per project
+- New `/api/dashboard` endpoint: aggregates cross-project stats (project count, active projects, task totals, completion, message totals incl. today, agent totals) plus the detailed project list
+
+## [v2.5.0] - 2026-09-16
+
+### UI/UX Improvements
+
+- **Decluttered top bar**: removed glyph indicator bar and redundant top agent pills (identity lives in the bottom bar); subtitle now dynamically shows the active project name
+- **Command bar compacted**: five controls collapsed into a MANUAL toggle + "CMD ▾" dropdown (copy check instructions / polling rules / onboarding guide)
+- **Long message collapse**: messages longer than 260 chars collapse by default with an expand/collapse button, preventing chat flooding
+- **Empty state guidance**: todo column shows "message @Agent in chat to create the first task" hint
+- **Visual noise reduction**: removed logo red-dot blink and status-dot pulse; slowed AI thinking animation
+
 ## [v2.3.1] - 2026-08-30
 
 ### Bug Fixes
