@@ -2539,13 +2539,23 @@ const LONG_MSG_CHARS = 260;
 const expandedMsgIdx = new Set();
 
 function renderMessage(msg, idx) {
+  msg = msg || {};
+  msg.content = msg.content || '';
+  msg.sender = msg.sender || '';
+  msg.type = msg.type || 'user';
+  msg.timestamp = msg.timestamp || '';
   const agent = boardData.agents.find(a => a.id === msg.sender);
   const color = AGENT_COLORS[msg.sender] || '#5f5f65';
   const name = agent ? agent.name : msg.sender;
   const isSelf = msg.sender === currentIdentity;
   const isSystem = msg.type === 'system';
 
-  const time = msg.timestamp ? msg.timestamp.split('T')[1].replace('+08:00', '') : '';
+  let time = '';
+  const ts = String(msg.timestamp);
+  if (ts) {
+    const tp = ts.split('T');
+    time = tp.length > 1 ? tp[1].replace('+08:00', '').slice(0, 5) : ts.slice(0, 16);
+  }
 
   // T1.1: 检测@提及
   const mentions = detectMentions(msg.content);
