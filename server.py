@@ -26,7 +26,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "project_config.json")
 DEFAULT_PORT = 8766
 
 # 多项目根目录（可通过环境变量 COLLAB_PROJECTS_ROOT 覆盖）
-PROJECTS_ROOT = os.environ.get("COLLAB_PROJECTS_ROOT", os.path.expanduser("~/agent-collab-projects"))
+PROJECTS_ROOT = os.environ.get("COLLAB_PROJECTS_ROOT", "/Users/zames/Desktop/Project/agent-collab-projects")
 
 # 全局锁，防止同进程内并发写冲突
 board_lock = threading.Lock()
@@ -1247,7 +1247,8 @@ def trigger_agent_if_mentioned(msg, board_data, project=None):
             # 如果是因为深度超限，发系统消息提示
             if "深度超过限制" in reason:
                 _append_system_message(
-                    f"[防循环] {reason}。请用户介入确认后继续。"
+                    f"[防循环] {reason}。请用户介入确认后继续。",
+                    project
                 )
             return
 
@@ -1341,10 +1342,15 @@ def _append_agent_message(agent_id, agent_name, content):
         save_board(data)
 
 
-def _append_system_message(content):
-    """T5.2: 追加系统通知消息（如API降级通知），独立于Agent回复"""
+def _append_system_message(content, project=None):
+    """T5.2: 追加系统通知消息（如API降级通知），独立于Agent回复
+    project: 项目名。为 None 时跳过写入（多项目模式下 load_board(None)
+    会落到服务 cwd 导致 FileNotFoundError 崩溃）"""
+    if not project:
+        print(f"[T5.2] 跳过系统消息（无 project 上下文）: {content[:60]}")
+        return
     with board_lock:
-        data = load_board()
+        data = load_board(project)
         new_id = max([m["id"] for m in data["messages"]], default=0) + 1
         new_msg = {
             "id": new_id,
@@ -1354,7 +1360,7 @@ def _append_system_message(content):
             "type": "system"
         }
         data["messages"].append(new_msg)
-        save_board(data)
+        save_board(data, project)
 
 
 # ===== Agent回复动作解析与执行（T3.3）=====
@@ -1965,7 +1971,8 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # 同时发一条系统消息
         self._append_system_message(
             f"任务 {task_id} 状态更新：{update.get('status', '?')}"
-            + (f"（{update.get('progress', '?')}%）" if "progress" in update else "")
+            + (f"（{update.get('progress', '?')}%）" if "progress" in update else ""),
+            project
         )
 
         self._send_json({"ok": True, "task_id": task_id})
@@ -2042,7 +2049,7 @@ class CollabHandler(SimpleHTTPRequestHandler):
                 agent_name = a["name"]
                 break
 
-        self._append_system_message(f"{agent_name} 认领了任务 {task_id}")
+        self._append_system_message(f"{agent_name} 认领了任务 {task_id}", project)
         self._send_json({"ok": True, "task_id": task_id, "assignee": assignee})
 
     def _handle_save_config(self, project=None):

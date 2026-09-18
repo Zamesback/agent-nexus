@@ -705,7 +705,7 @@
     <div class="subtitle">PROJECT MANAGER // 项目管理</div>
   </div>
   <div class="topbar-right">
-    <div class="root-path" id="rootPath">~/agent-collab-projects</div>
+    <div class="root-path" id="rootPath">/Users/zames/Desktop/Project/agent-collab-projects</div>
   </div>
 </div>
 
@@ -840,7 +840,7 @@
       const resp = await fetch('/api/projects');
       const data = await resp.json();
       projects = data.projects || [];
-      document.getElementById('rootPath').textContent = data.root || '~/agent-collab-projects';
+      document.getElementById('rootPath').textContent = data.root || '/Users/zames/Desktop/Project/agent-collab-projects';
       document.getElementById('projectCount').textContent = projects.length;
       renderProjects();
     } catch (e) {

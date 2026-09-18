@@ -517,11 +517,43 @@
 
   /* ===== 聊天区域 ===== */
   .chat-area {
-    width: 380px;
+    width: 46%;
+    min-width: 340px;
+    max-width: 75%;
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
     background: transparent;
+    transition: width 0.15s ease;
+  }
+  /* 可拖拽分隔条（v2.4：可调沟通区比例） */
+  .layout-splitter {
+    width: 6px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    z-index: 5;
+  }
+  .layout-splitter:hover,
+  .layout-splitter.active {
+    background: rgba(255,54,33,.18);
+  }
+  .layout-splitter::after {
+    content: '\u22ee\u22ee';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    color: var(--line-2);
+    font-size: 10px;
+    letter-spacing: 1px;
+    pointer-events: none;
+    user-select: none;
+  }
+  .layout-splitter:hover::after,
+  .layout-splitter.active::after {
+    color: var(--red);
   }
   .chat-header {
     padding: 16px 20px 10px;
@@ -1339,6 +1371,9 @@
     <div class="board-columns" id="board-columns"></div>
   </div>
 
+  <!-- 可拖拽分隔条（v2.4） -->
+  <div class="layout-splitter" id="layout-splitter" title="拖拽调整沟通区宽度 · 双击重置"></div>
+
   <!-- 聊天 -->
   <div class="chat-area">
     <div class="chat-header">
@@ -1352,6 +1387,7 @@
         <label class="switch small"><input type="checkbox" id="auto-trigger-toggle" onchange="toggleAutoTrigger()" /><span class="slider"></span></label>
       </div>
       <button class="global-copy-btn" id="global-copy-btn" onclick="copyGlobalTrigger()">复制检查指令 // COPY</button>
+      <button class="onboard-btn" id="poll-guide-btn" onclick="copyPollGuide()">轮询准则 // POLL</button>
       <button class="onboard-btn" id="onboard-btn" onclick="openOnboardingGuide()">接入引导 // GUIDE</button>
     </div>
     <div class="ai-thinking" id="ai-thinking"><span>AI 正在思考</span><i></i><i></i><i></i></div>
@@ -1540,7 +1576,7 @@ window.fetch = function(url, options) {
 // 如果有project参数，更新JSON_PATH显示
 if (currentProject) {
   // 动态更新项目数据文件路径
-  window.PROJECT_JSON_PATH = `/Users/zames/agent-collab-projects/${currentProject}/collab_board.json`;
+  window.PROJECT_JSON_PATH = `/Users/zames/Desktop/Project/agent-collab-projects/${currentProject}/collab_board.json`;
 }
 
 // ===== 触发指令模板（T1.4 可配置）=====
@@ -1552,8 +1588,8 @@ const DEFAULT_TRIGGER_TEMPLATES = {
 let triggerTemplates = { ...DEFAULT_TRIGGER_TEMPLATES };
 // 动态JSON路径：多项目模式下使用项目根目录下的路径
 const JSON_PATH = currentProject
-  ? `/Users/zames/agent-collab-projects/${currentProject}/collab_board.json`
-  : '/Users/zames/Desktop/agent-collab-dev/collab_board.json';
+  ? `/Users/zames/Desktop/Project/agent-collab-projects/${currentProject}/collab_board.json`
+  : '/Users/zames/Desktop/Project/agent-collab-dev/collab_board.json';
 
 // Nothing 风格 Agent 配色：单色基调 + 红强调
 const AGENT_COLORS = {
@@ -1592,6 +1628,8 @@ function initGlyphBar() {
 // ===== 初始化 =====
 async function init() {
   initGlyphBar();
+  restoreChatWidth();
+  initLayoutSplitter();
   await loadConfig();
   await loadBoard();
   renderAgentPills();
@@ -1919,6 +1957,41 @@ async function copyGlobalTrigger() {
       btn.textContent = '复制检查指令 // COPY';
       btn.classList.remove('copied');
     }, 2000);
+  }
+}
+
+// ===== 守护轮询准则（v2.4）：一键复制给 Agent =====
+function buildPollGuide() {
+  const projectName = currentProject || 'YOUR_PROJECT';
+  return `【守护轮询准则 - 请务必遵守，直到项目结束或我说停止】
+
+你是本项目的<你的角色>。从此刻起，你需要主动定期检查看板，不需要等我每次都提醒你。
+
+1. 轮询频率：每 2 分钟检查一次看板文件
+2. 看板文件路径：/Users/zames/Desktop/Project/agent-collab-projects/${projectName}/collab_board.json
+3. 看板地址：http://localhost:8766/collab_board_nothing.html?project=${projectName}
+4. 每次检查：
+   - 读取 collab_board.json 的 messages 和 tasks
+   - 只看【新增的、@了你的】消息（跳过你已经处理过的）
+   - 有新任务/新消息 → 立即处理：认领任务、执行、更新任务状态、写回结果到 JSON
+   - 没有新消息 → 不要回复任何内容，只默默记录"已检查"
+5. 处理完消息后，把结果写回 collab_board.json，让看板上的其他人能看到
+6. 如果遇到需要我决策的问题，写一条消息 @我，然后继续做你能做的部分
+7. 除非我说"停止轮询"，否则持续执行`;
+}
+
+async function copyPollGuide() {
+  const text = buildPollGuide();
+  const ok = await copyToClipboard(text);
+  const btn = document.getElementById('poll-guide-btn');
+  if (ok && btn) {
+    btn.textContent = '已复制 // COPIED';
+    btn.classList.add('copied');
+    showToast('守护轮询准则已复制，粘贴给 Agent 即可');
+    setTimeout(() => {
+      btn.textContent = '轮询准则 // POLL';
+      btn.classList.remove('copied');
+    }, 2500);
   }
 }
 
@@ -2568,6 +2641,61 @@ function setupEventListeners() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeTaskDetail();
+  });
+}
+
+// ===== 可调沟通区比例（v2.4）=====
+const LAYOUT_KEY = 'agentnexus_chat_width_pct';
+function restoreChatWidth() {
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY);
+    if (saved) {
+      const chatArea = document.getElementById('chat-area') || document.querySelector('.chat-area');
+      if (chatArea) chatArea.style.width = saved + '%';
+    }
+  } catch (e) { /* ignore */ }
+}
+function initLayoutSplitter() {
+  const splitter = document.getElementById('layout-splitter') || document.querySelector('.layout-splitter');
+  const chatArea = document.getElementById('chat-area') || document.querySelector('.chat-area');
+  if (!splitter || !chatArea) return;
+
+  splitter.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    splitter.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev) => {
+      const rect = document.body.getBoundingClientRect();
+      const widthPct = ((rect.width - ev.clientX) / rect.width) * 100;
+      const clamped = Math.min(75, Math.max(20, widthPct));
+      chatArea.style.width = clamped + '%';
+      chatArea.style.transition = 'none';
+    };
+    const onUp = (ev) => {
+      splitter.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      chatArea.style.transition = '';
+      const rect = document.body.getBoundingClientRect();
+      const widthPct = ((rect.width - ev.clientX) / rect.width) * 100;
+      const clamped = Math.min(75, Math.max(20, widthPct));
+      try {
+        localStorage.setItem(LAYOUT_KEY, Math.round(clamped));
+      } catch (e) { /* ignore */ }
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  // 双击分隔条重置为默认 46%
+  splitter.addEventListener('dblclick', () => {
+    chatArea.style.width = '46%';
+    try { localStorage.removeItem(LAYOUT_KEY); } catch (e) { /* ignore */ }
+    showToast('沟通区已重置为默认比例 46%');
   });
 }
 
