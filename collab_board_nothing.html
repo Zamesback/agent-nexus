@@ -85,11 +85,6 @@
     width: 5px; height: 5px;
     background: var(--red);
     border-radius: 50%;
-    animation: blink 1.5s infinite;
-  }
-  @keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.2; }
   }
   .topbar-left .subtitle {
     font-family: var(--mono);
@@ -98,26 +93,7 @@
     margin-top: 4px;
     letter-spacing: 0.5px;
   }
-  .topbar-right { display: flex; align-items: center; gap: 18px; }
-  .agent-pills { display: flex; gap: 6px; }
-  .agent-pill {
-    display: flex; align-items: center; gap: 6px;
-    padding: 5px 11px;
-    border-radius: 3px;
-    background: var(--panel);
-    border: 1px solid var(--line-2);
-    font-family: var(--pixel);
-    font-size: 9px;
-    color: var(--dim);
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    transition: all 0.2s;
-  }
-  .agent-pill:hover { border-color: var(--line); }
-  .agent-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-  }
+  .topbar-right { display: flex; align-items: center; gap: 14px; }
   .status-indicator {
     display: flex; align-items: center; gap: 7px;
     font-family: var(--pixel);
@@ -130,30 +106,9 @@
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--red);
-    animation: pulse 2s infinite;
-    box-shadow: 0 0 8px var(--red-glow);
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--red-glow); }
-    50% { opacity: 0.35; box-shadow: 0 0 2px var(--red-glow); }
   }
 
-  /* Glyph 灯条 */
-  .glyph-bar {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-  }
-  .glyph-dot {
-    width: 4px; height: 4px;
-    background: var(--red);
-    border-radius: 50%;
-    opacity: 0.3;
-  }
-  .glyph-dot.on {
-    opacity: 1;
-    box-shadow: 0 0 6px var(--red-glow);
-  }
+  /* (v2.5: Glyph 灯条已移除，减少视觉噪音) */
 
   /* ===== 主体 ===== */
   .main {
@@ -261,6 +216,26 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .col-empty {
+    padding: 20px 10px;
+    text-align: center;
+    color: var(--dim-2);
+    font-family: var(--pixel);
+    font-size: 8px;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    border: 1px dashed var(--line-2);
+    border-radius: var(--radius-sm);
+  }
+  .col-empty .col-empty-tip {
+    color: var(--dim);
+    margin-top: 8px;
+    font-family: var(--sans);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.5;
   }
 
   /* 任务卡片 — Nothing 风格：半透明描边 */
@@ -636,6 +611,32 @@
     border-color: var(--red);
     color: var(--text);
   }
+  /* 长消息折叠（v2.5）*/
+  .msg-text-wrap { position: relative; }
+  .msg-body { max-height: 340px; overflow: hidden; transition: max-height .25s ease; position: relative; }
+  .msg-body.collapsed { max-height: 132px; }
+  .msg-body.collapsed::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 46px;
+    background: linear-gradient(transparent, rgba(15,15,17,.95));
+    pointer-events: none;
+  }
+  .msg-expand-btn {
+    margin-top: 4px;
+    padding: 2px 0;
+    background: none;
+    border: none;
+    color: var(--dim-2);
+    font-family: var(--pixel);
+    font-size: 8px;
+    letter-spacing: .5px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: color .15s;
+  }
+  .msg-expand-btn:hover { color: var(--red); }
   .msg-time {
     font-family: var(--mono);
     font-size: 13px;
@@ -691,6 +692,55 @@
     letter-spacing: 0.5px;
     text-transform: uppercase;
   }
+  /* ===== 指令下拉菜单（v2.5）===== */
+  .cmd-menu { position: relative; }
+  .cmd-menu-btn {
+    padding: 6px 12px;
+    background: var(--red-soft);
+    border: 1px solid var(--red);
+    border-radius: 3px;
+    color: var(--red);
+    font-family: var(--pixel);
+    font-size: 8px;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .cmd-menu-btn:hover { background: var(--red); color: #fff; }
+  .cmd-menu-btn .caret { font-size: 9px; line-height: 1; }
+  .cmd-menu-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 190px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 4px;
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 60;
+    box-shadow: 0 12px 32px rgba(0,0,0,.55);
+  }
+  .cmd-menu-dropdown.open { display: flex; }
+  .cmd-item {
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--dim);
+    font-family: var(--pixel);
+    font-size: 9px;
+    letter-spacing: 0.5px;
+    text-align: left;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all .15s;
+  }
+  .cmd-item:hover { background: var(--red-soft); color: var(--red); }
   .global-copy-btn {
     padding: 6px 12px;
     background: var(--red-soft);
@@ -1031,7 +1081,7 @@
     background: var(--red);
     border-radius: 50%;
     display: inline-block;
-    animation: think 1.2s infinite ease-in-out;
+    animation: think 2.4s infinite ease-in-out;
   }
   .ai-thinking i:nth-child(2) { animation-delay: 0.2s; }
   .ai-thinking i:nth-child(3) { animation-delay: 0.4s; }
@@ -1347,11 +1397,9 @@
       <span class="logo-mark">C</span>
       COLLAB // 协作看板
     </h1>
-    <div class="subtitle" id="project-subtitle">ENGINE INTERACTIVE HOMEPAGE // MULTI-AGENT</div>
+    <div class="subtitle" id="project-subtitle">LOADING...</div>
   </div>
   <div class="topbar-right">
-    <div class="glyph-bar" id="glyph-bar"></div>
-    <div class="agent-pills" id="agent-pills"></div>
     <button class="api-settings-btn" onclick="openApiSettings()">API 设置</button>
     <div class="status-indicator">
       <div class="status-dot"></div>
@@ -1381,14 +1429,18 @@
       <span class="msg-count" id="msg-count">0</span>
     </div>
     <div class="global-copy-bar">
-      <span class="global-copy-label">触发指令 // TRIGGER</span>
       <div class="auto-trigger-ctl" title="自动触发总开关：开启后 @ 消息自动回复，关闭则退回手动复制模式">
         <span class="auto-trigger-status" id="auto-trigger-status">MANUAL</span>
         <label class="switch small"><input type="checkbox" id="auto-trigger-toggle" onchange="toggleAutoTrigger()" /><span class="slider"></span></label>
       </div>
-      <button class="global-copy-btn" id="global-copy-btn" onclick="copyGlobalTrigger()">复制检查指令 // COPY</button>
-      <button class="onboard-btn" id="poll-guide-btn" onclick="copyPollGuide()">轮询准则 // POLL</button>
-      <button class="onboard-btn" id="onboard-btn" onclick="openOnboardingGuide()">接入引导 // GUIDE</button>
+      <div class="cmd-menu">
+        <button class="cmd-menu-btn" id="cmd-menu-btn" onclick="toggleCmdMenu(event)">指令 // CMD <span class="caret">&#9662;</span></button>
+        <div class="cmd-menu-dropdown" id="cmd-menu-dropdown">
+          <button class="cmd-item" onclick="cmdRun(event, 'copyGlobalTrigger')">复制检查指令 // COPY</button>
+          <button class="cmd-item" onclick="cmdRun(event, 'copyPollGuide')">轮询准则 // POLL</button>
+          <button class="cmd-item" onclick="cmdRun(event, 'openOnboardingGuide')">接入引导 // GUIDE</button>
+        </div>
+      </div>
     </div>
     <div class="ai-thinking" id="ai-thinking"><span>AI 正在思考</span><i></i><i></i><i></i></div>
     <div class="chat-messages" id="chat-messages"></div>
@@ -1605,34 +1657,12 @@ const STATUS_CONFIG = {
   blocked: { label: '阻塞', colClass: 'col-blocked', progressClass: 'progress-blocked' }
 };
 
-// Glyph 灯动画
-function initGlyphBar() {
-  const bar = document.getElementById('glyph-bar');
-  const dots = [];
-  for (let i = 0; i < 8; i++) {
-    const dot = document.createElement('div');
-    dot.className = 'glyph-dot';
-    bar.appendChild(dot);
-    dots.push(dot);
-  }
-  // 错峰闪烁
-  let step = 0;
-  setInterval(() => {
-    dots.forEach((d, i) => {
-      d.classList.toggle('on', (i + step) % 3 === 0);
-    });
-    step++;
-  }, 400);
-}
-
 // ===== 初始化 =====
 async function init() {
-  initGlyphBar();
   restoreChatWidth();
   initLayoutSplitter();
   await loadConfig();
   await loadBoard();
-  renderAgentPills();
   renderIdentitySelector();
   loadAutoTriggerStatus();
   setupEventListeners();
@@ -1662,6 +1692,14 @@ async function loadBoard() {
     renderBoard();
     renderChat();
     renderStats();
+    // v2.5: 副标题动态显示当前项目名
+    const projParam = new URLSearchParams(location.search).get('project') || '';
+    const subEl = document.getElementById('project-subtitle');
+    if (subEl) {
+      subEl.textContent = projParam
+        ? ('PROJECT // ' + projParam.toUpperCase())
+        : (boardData.name ? boardData.name : 'AGENT NEXUS');
+    }
     document.getElementById('status-text').textContent = 'LIVE';
   } catch (e) {
     document.getElementById('status-text').textContent = 'OFFLINE';
@@ -1670,18 +1708,7 @@ async function loadBoard() {
 }
 
 // ===== 渲染：Agent 标签 =====
-function renderAgentPills() {
-  const container = document.getElementById('agent-pills');
-  container.innerHTML = boardData.agents.map(a => {
-    const color = AGENT_COLORS[a.id] || '#5f5f65';
-    return `
-      <div class="agent-pill">
-        <div class="agent-dot" style="background:${color};"></div>
-        <span>${a.name}</span>
-      </div>
-    `;
-  }).join('');
-}
+// （v2.5: 顶部 Agent pills 已移除，与底部身份选择器去重；成员总览在聊天区身份栏）
 
 // ===== 渲染：身份选择器 =====
 function renderIdentitySelector() {
@@ -1732,11 +1759,18 @@ function renderBoard() {
           <span class="count">${tasks.length}</span>
         </div>
         <div class="col-body">
-          ${tasks.map(t => renderTaskCard(t, cfg)).join('')}
+          ${tasks.length ? tasks.map(t => renderTaskCard(t, cfg)).join('') : renderColEmpty(status)}
         </div>
       </div>
     `;
   }).join('');
+}
+
+function renderColEmpty(status) {
+  if (status === 'todo') {
+    return `<div class="col-empty"><div>暂无任务</div><div class="col-empty-tip">在聊天区 @Agent 并发送需求，即可创建第一个任务</div></div>`;
+  }
+  return `<div class="col-empty">空</div>`;
 }
 
 function renderTaskCard(task, cfg) {
@@ -1843,7 +1877,7 @@ function renderChat() {
 
   lastMessageCount = messages.length;
 
-  container.innerHTML = messages.map(m => renderMessage(m)).join('');
+  container.innerHTML = messages.map((m, idx) => renderMessage(m, idx)).join('');
 
   if (autoScroll) {
     container.scrollTop = container.scrollHeight;
@@ -2445,7 +2479,10 @@ async function saveScheduleConfig() {
   }
 }
 
-function renderMessage(msg) {
+const LONG_MSG_CHARS = 260;
+const expandedMsgIdx = new Set();
+
+function renderMessage(msg, idx) {
   const agent = boardData.agents.find(a => a.id === msg.sender);
   const color = AGENT_COLORS[msg.sender] || '#5f5f65';
   const name = agent ? agent.name : msg.sender;
@@ -2462,6 +2499,10 @@ function renderMessage(msg) {
     return `<div class="msg system"><div class="msg-content">${contentHtml}</div></div>`;
   }
 
+  // 长消息折叠（v2.5）：超过阈值默认收起，展开状态按消息索引记忆
+  const isLong = msg.content.length > LONG_MSG_CHARS;
+  const isCollapsed = isLong && !expandedMsgIdx.has(idx);
+
   // T1.1/T1.2: 为每个被@的Agent生成复制按钮
   let copyButtons = '';
   if (mentions.length > 0) {
@@ -2472,18 +2513,63 @@ function renderMessage(msg) {
       '</div>';
   }
 
+  const expandBtn = isLong
+    ? `<button class="msg-expand-btn" onclick="toggleMsgExpand(${idx}, this)">${isCollapsed ? '展开全文 ▾' : '收起 ▴'}</button>`
+    : '';
+
   return `
     <div class="msg ${isSelf ? 'self' : ''}">
       <div class="msg-sender">
         <span class="dot" style="background:${color};"></span>
         <span style="color:${color};">${name}</span>
       </div>
-      <div class="msg-content">${contentHtml}</div>
+      <div class="msg-text-wrap">
+        <div class="msg-body ${isCollapsed ? 'collapsed' : ''}">${contentHtml}</div>
+        ${expandBtn}
+      </div>
       ${copyButtons}
       <div class="msg-time">${time}</div>
     </div>
   `;
 }
+
+// ===== 长消息展开/收起（v2.5）=====
+function toggleMsgExpand(idx, btn) {
+  const wrap = btn.closest('.msg-text-wrap');
+  if (!wrap) return;
+  const body = wrap.querySelector('.msg-body');
+  if (!body) return;
+  if (body.classList.contains('collapsed')) {
+    body.classList.remove('collapsed');
+    btn.textContent = '收起 ▴';
+    expandedMsgIdx.add(idx);
+  } else {
+    body.classList.add('collapsed');
+    btn.textContent = '展开全文 ▾';
+    expandedMsgIdx.delete(idx);
+  }
+}
+
+// ===== 指令下拉菜单（v2.5）=====
+function toggleCmdMenu(ev) {
+  ev.stopPropagation();
+  const dd = document.getElementById('cmd-menu-dropdown');
+  const open = dd.classList.contains('open');
+  document.querySelectorAll('.cmd-menu-dropdown.open').forEach(el => el.classList.remove('open'));
+  if (!open) dd.classList.add('open');
+}
+
+function cmdRun(ev, fnName) {
+  ev.stopPropagation();
+  document.querySelectorAll('.cmd-menu-dropdown.open').forEach(el => el.classList.remove('open'));
+  if (typeof window[fnName] === 'function') window[fnName]();
+}
+
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('.cmd-menu')) {
+    document.querySelectorAll('.cmd-menu-dropdown.open').forEach(el => el.classList.remove('open'));
+  }
+});
 
 // ===== 自动触发开关 + AI思考动画（T3.5/T3.6）=====
 async function loadAutoTriggerStatus() {
