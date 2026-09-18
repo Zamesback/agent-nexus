@@ -63,6 +63,54 @@
   [data-theme="apple"] ::-webkit-scrollbar-track { background: #f5f5f7; }
   [data-theme="apple"] ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.18); }
 
+  /* ===== Modern Premium 皮肤（v2.7 设计顾问基线）=====
+     近黑 #0F0F10 / 纸感 #F6F3EC / 唯一强调红 #E8493F / Georgia 标题 / 发丝线 */
+  [data-theme="premium"] {
+    --bg: #0F0F10;
+    --bg-2: #161618;
+    --panel-rgb: 255, 255, 255;
+    --panel: rgba(255,255,255,.045);
+    --panel-2: rgba(255,255,255,.08);
+    --line: rgba(255,255,255,.10);
+    --line-2: rgba(255,255,255,.055);
+    --text: #F2F1ED;
+    --dim: #A3A2A8;
+    --dim-2: #6E6D73;
+    --red: #E8493F;
+    --red-rgb: 232, 73, 63;
+    --red-soft: rgba(232,73,63,.12);
+    --red-glow: rgba(232,73,63,.35);
+    --green: #3FB97F;
+    --pixel: Georgia, 'Songti SC', 'STSong', 'Noto Serif SC', serif;
+    --mono: 'SF Mono','Menlo',Consolas,'Courier New',monospace;
+    --sans: -apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Noto Sans SC','Microsoft YaHei',sans-serif;
+    --radius: 6px;
+    --radius-sm: 4px;
+  }
+  [data-theme="premium"] body {
+    background: linear-gradient(180deg, #161619 0%, #0F0F10 100%);
+  }
+  [data-theme="premium"] .topbar {
+    background: rgba(15,15,16,.82);
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  [data-theme="premium"] .modal {
+    background: #161618;
+  }
+  [data-theme="premium"] .confirm-input-group input,
+  [data-theme="premium"] .form-group input,
+  [data-theme="premium"] .form-group textarea,
+  [data-theme="premium"] .agent-checkbox {
+    background: #161618;
+  }
+  [data-theme="premium"] .project-card,
+  [data-theme="premium"] .stat-card,
+  [data-theme="premium"] .create-card {
+    border-radius: 6px;
+  }
+  [data-theme="premium"] ::-webkit-scrollbar-track { background: #0F0F10; }
+  [data-theme="premium"] ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); }
+
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
     background:
@@ -712,7 +760,7 @@
     <div class="subtitle">MULTI-AGENT COMMAND CENTER // 多Agent指挥中心</div>
   </div>
   <div class="topbar-right">
-    <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色">N // 暗色</button>
+    <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色 / Premium">N // 暗色</button>
     <div class="root-path" id="rootPath">/Users/zames/Desktop/Project/agent-collab-projects</div>
   </div>
 </div>
@@ -832,16 +880,20 @@
 </div>
 
 <script>
-  // ===== 皮肤系统（v2.6）：Nothing / Apple 切换 =====
+  // ===== 皮肤系统（v2.7）：Nothing / Apple / Premium 三态循环 =====
+  const THEME_ORDER = ['nothing', 'apple', 'premium'];
+  const THEME_NEXT_LABEL = { nothing: 'A // 亮色', apple: 'P // Premium', premium: 'N // 暗色' };
   function applyTheme(t) {
     document.documentElement.setAttribute('data-theme', t);
     try { localStorage.setItem('agentnexus_theme', t); } catch (e) {}
     const btn = document.getElementById('theme-toggle');
-    if (btn) btn.textContent = t === 'apple' ? 'N // 暗色' : 'A // 亮色';
+    if (btn) btn.textContent = THEME_NEXT_LABEL[t] || 'A // 亮色';
   }
   function toggleTheme() {
     const cur = document.documentElement.getAttribute('data-theme') || 'nothing';
-    applyTheme(cur === 'apple' ? 'nothing' : 'apple');
+    const idx = THEME_ORDER.indexOf(cur);
+    const next = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+    applyTheme(next);
   }
   function initTheme() {
     let saved = 'nothing';
