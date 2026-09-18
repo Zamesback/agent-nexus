@@ -608,6 +608,23 @@ def save_board(data, project=None):
         os.replace(tmp_path, board_file)
 
 
+def _normalize_config_agents(data):
+    """兼容旧格式：project_config.json 的 agents 可能是字符串列表（v1.x 创建的项目），
+    归一化为 dict 列表（内存级，不写回），避免下游 a.get() 崩溃。"""
+    if not isinstance(data, dict):
+        return
+    agents = data.get("agents")
+    if not isinstance(agents, list):
+        return
+    normalized = []
+    for a in agents:
+        if isinstance(a, str):
+            normalized.append({"id": a, "name": a, "role": "", "connected": False})
+        else:
+            normalized.append(a)
+    data["agents"] = normalized
+
+
 def load_config(project=None):
     """读取项目配置（共享锁），api_key 自动解密为明文供上层使用
     project: 项目名，None表示使用当前目录（向后兼容）
@@ -620,6 +637,7 @@ def load_config(project=None):
         with open(config_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     _decrypt_config_inplace(data)
+    _normalize_config_agents(data)
     return data
 
 
