@@ -358,7 +358,8 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
 
     Args:
         project_name: 项目文件夹名（唯一标识）
-        agents: 接入的Agent列表，如 ["user", "planner", "builder"]
+        agents: 接入的Agent列表，支持 ["user", "planner", "builder"] 字符串
+                  或自定义 [{"id": "agent_1", "name": "品牌设计师", "role": "视觉/品牌"}]
         workspace: 工作区路径
         handoff: 交接文件内容
         project_title: 项目显示名称
@@ -389,12 +390,41 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
         "builder": {"id": "builder", "name": "执行Agent", "role": "前端开发/后端开发/测试/文档", "status": "online"}
     }
 
-    # 选择接入的Agent
+    # 选择接入的Agent（兼容字符串列表 ["user","planner"] 与自定义 dict 列表
+    # [{"id":"agent_1","name":"品牌设计师","role":"视觉/品牌"}, ...]）
     if agents is None:
         agents = ["user", "planner", "builder"]
-    selected_agents = [all_agents[a] for a in agents if a in all_agents]
-    if "user" not in agents:
-        selected_agents.insert(0, all_agents["user"])  # 用户必须在
+    selected_agents = []
+    seen_ids = set()
+    for a in agents:
+        if isinstance(a, dict):
+            aid = str(a.get("id", "")).strip()
+            if not aid or aid in seen_ids:
+                continue
+            seen_ids.add(aid)
+            selected_agents.append({
+                "id": aid,
+                "name": str(a.get("name", aid)).strip() or aid,
+                "role": str(a.get("role", "")).strip(),
+                "status": "online",
+            })
+        else:
+            aid = str(a).strip()
+            if aid in all_agents and aid not in seen_ids:
+                seen_ids.add(aid)
+                selected_agents.append(all_agents[aid])
+    # 用户必须在且置顶
+    user_agent = None
+    for a in selected_agents:
+        if a["id"] == "user":
+            user_agent = a
+            break
+    if user_agent is None:
+        user_agent = dict(all_agents["user"])
+        selected_agents.insert(0, user_agent)
+    elif selected_agents[0]["id"] != "user":
+        selected_agents.remove(user_agent)
+        selected_agents.insert(0, user_agent)
 
     # 创建看板数据
     now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")

@@ -2,6 +2,20 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.8.0] - 2026-09-19
+
+### New Features
+
+- **Unlimited custom Agents per project**: the project creation dialog no longer limits you to the fixed Planner/Builder pair
+  - Dynamic agent rows: type any agent name (e.g. 品牌设计师, 前端开发, 测试工程师) and a role/identity line; add as many rows as needed, remove any row
+  - Zames (the user/owner) stays fixed and always first
+  - Backend `create_project` accepts custom dict lists `[{"id","name","role"}, ...]` alongside the legacy string list; the user agent is always inserted at the top
+- **Custom-identity onboarding**: the per-agent onboarding guide is now generated from each agent's own name + role (a "品牌设计师" gets a 品牌设计师 identity brief, not a generic Planner/Builder script); built-in keyword detection still applies to planner/builder/user
+- **Auto agent colors on the board**: custom agents get a stable color from an 8-color palette via id-hash (identity selector, task assignee, message sender), instead of falling back to one gray
+
+### Notes
+
+- Existing projects keep their current agents untouched (backward compatible).
 ## [v2.7.0] - 2026-09-18
 
 ### New Features

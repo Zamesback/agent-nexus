@@ -1758,6 +1758,14 @@ const AGENT_COLORS = {
   builder: '#a1a1a6',   // 亮灰 — 执行者
   user: '#f4f4f5',      // 近白 — 用户
 };
+// v2.8: 自定义 Agent 自动取色（内置色优先，其余按 id 哈希从调色板稳定分配）
+const AGENT_PALETTE = ['#e8b34b', '#5aa9e6', '#7ac74f', '#d65db1', '#4ecdc4', '#ff8c42', '#8c7ae6', '#63cdda'];
+function colorForAgent(id) {
+  if (AGENT_COLORS[id]) return AGENT_COLORS[id];
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AGENT_PALETTE[h % AGENT_PALETTE.length];
+}
 
 const STATUS_CONFIG = {
   todo: { label: '待办', colClass: 'col-todo', progressClass: 'progress-todo' },
@@ -1824,7 +1832,7 @@ async function loadBoard() {
 function renderIdentitySelector() {
   const container = document.getElementById('chat-identity');
   container.innerHTML = boardData.agents.map(a => {
-    const color = AGENT_COLORS[a.id] || '#5f5f65';
+    const color = colorForAgent(a.id);
     return `
       <button class="identity-btn ${a.id === currentIdentity ? 'active' : ''}"
               style="--agent-color:${color};"
@@ -1885,7 +1893,7 @@ function renderColEmpty(status) {
 
 function renderTaskCard(task, cfg) {
   const agent = boardData.agents.find(a => a.id === task.assignee);
-  const agentColor = AGENT_COLORS[task.assignee] || '#5f5f65';
+  const agentColor = colorForAgent(task.assignee);
   const agentName = agent ? agent.name : task.assignee;
   const depends = task.depends_on && task.depends_on.length > 0
     ? `← ${task.depends_on.join(',')}` : '';
@@ -2599,7 +2607,7 @@ function renderMessage(msg, idx) {
   msg.type = msg.type || 'user';
   msg.timestamp = msg.timestamp || '';
   const agent = boardData.agents.find(a => a.id === msg.sender);
-  const color = AGENT_COLORS[msg.sender] || '#5f5f65';
+  const color = colorForAgent(msg.sender);
   const name = agent ? agent.name : msg.sender;
   const isSelf = msg.sender === currentIdentity;
   const isSystem = msg.type === 'system';

@@ -643,6 +643,43 @@
   .agent-checkbox:has(input:checked) { border-color: var(--red); background: var(--red-soft); }
   .agent-label { font-family: var(--pixel); font-size: 10px; color: var(--dim); letter-spacing: 0.5px; text-transform: uppercase; }
   .agent-checkbox:has(input:checked) .agent-label { color: var(--red); }
+  .agent-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .agent-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    background: var(--bg-2);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .agent-row input:focus { border-color: var(--red); }
+  .agent-row input::placeholder { color: var(--dim-2); }
+  .agent-remove-btn {
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--dim);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    transition: all 0.2s;
+  }
+  .agent-remove-btn:hover { color: var(--red); border-color: var(--red); }
+  .add-agent-btn { margin-top: 4px; font-size: 13px; }
+  .agent-checkbox.locked { opacity: .7; cursor: default; }
   .modal-actions {
     display: flex;
     gap: 10px;
@@ -818,11 +855,11 @@
       <textarea id="projectDesc" placeholder="简要描述这个项目的目标和背景..."></textarea>
     </div>
     <div class="form-group">
-      <label>接入 Agent</label>
+      <label>接入 Agent <span class="hint">可添加多个，名字与身份自定义</span></label>
       <div class="agent-checkboxes">
-        <label class="agent-checkbox"><input type="checkbox" value="user" checked /><span class="agent-label">Zames 用户</span></label>
-        <label class="agent-checkbox"><input type="checkbox" value="planner" checked /><span class="agent-label">规划Agent</span></label>
-        <label class="agent-checkbox"><input type="checkbox" value="builder" checked /><span class="agent-label">执行Agent</span></label>
+        <label class="agent-checkbox locked"><input type="checkbox" value="user" checked disabled /><span class="agent-label">Zames 用户（项目主导方）</span></label>
+        <div id="agent-rows"><!-- 动态 Agent 行 --></div>
+        <button type="button" class="btn btn-secondary add-agent-btn" onclick="addAgentRow()">＋ 添加 Agent</button>
       </div>
     </div>
     <div class="form-group">
@@ -1024,7 +1061,43 @@
   }
 
   // ===== 创建项目（保留）=====
-  function openModal() { document.getElementById('createModal').classList.add('active'); }
+  function openModal() {
+    resetAgentRows();
+    document.getElementById('createModal').classList.add('active');
+  }
+  // ===== 多 Agent 动态编辑（v2.8）：名字与身份自定义、数量不限 =====
+  const DEFAULT_AGENT_ROWS = [
+    { name: '规划Agent', role: '任务拆解/方案评审/进度协调/验收' },
+    { name: '执行Agent', role: '前端开发/后端开发/测试/文档' },
+  ];
+  function escapeAttr(v) {
+    return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+  function addAgentRow(agent) {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    row.innerHTML =
+      '<input class="agent-name-input" placeholder="Agent 名字（如：品牌设计师）" value="' + escapeAttr(agent && agent.name) + '" />' +
+      '<input class="agent-role-input" placeholder="身份 / 职责（如：视觉设计/海报/品牌）" value="' + escapeAttr(agent && agent.role) + '" />' +
+      '<button type="button" class="agent-remove-btn" onclick="removeAgentRow(this)" title="移除该 Agent">✕</button>';
+    document.getElementById('agent-rows').appendChild(row);
+  }
+  function removeAgentRow(btn) { btn.closest('.agent-row').remove(); }
+  function resetAgentRows() {
+    const box = document.getElementById('agent-rows');
+    box.innerHTML = '';
+    DEFAULT_AGENT_ROWS.forEach(a => addAgentRow(a));
+  }
+  function collectAgents() {
+    const agents = ['user'];
+    document.querySelectorAll('#agent-rows .agent-row').forEach((row, idx) => {
+      const name = row.querySelector('.agent-name-input').value.trim();
+      const role = row.querySelector('.agent-role-input').value.trim();
+      if (!name) return; // 空行跳过
+      agents.push({ id: 'agent_' + (idx + 1), name: name, role: role });
+    });
+    return agents;
+  }
   function closeModal() { document.getElementById('createModal').classList.remove('active'); }
 
   async function createProject() {
@@ -1034,8 +1107,7 @@
     const workspace = document.getElementById('workspace').value.trim();
     const handoff = document.getElementById('handoff').value.trim();
     if (!projectName) { alert('请输入项目标识'); return; }
-    const agents = [];
-    document.querySelectorAll('.agent-checkbox input:checked').forEach(cb => agents.push(cb.value));
+    const agents = collectAgents();
     try {
       const resp = await fetch('/api/projects', {
         method: 'POST',
