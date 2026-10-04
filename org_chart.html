@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="nothing">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentNexus · 组织视图</title>
+<style>
+  /* ===== 基础 ===== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0c;
+    --bg-2: #141418;
+    --panel: #1a1a1f;
+    --panel-2: #222228;
+    --text: #f2f2f4;
+    --dim: #9a9aa2;
+    --dim-2: #5c5c66;
+    --line: #2a2a32;
+    --line-2: #3a3a44;
+    --accent: #e5484d;
+    --accent-rgb: 229, 72, 77;
+    --green: #30a46c;
+    --amber: #f5a524;
+    --blue: #4c8dff;
+    --purple: #9c7bd8;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+    --radius-lg: 16px;
+    --radius-md: 10px;
+    --radius-sm: 8px;
+  }
+  [data-theme="apple"] {
+    --bg: #f5f5f7;
+    --bg-2: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f2f2f4;
+    --text: #1d1d1f;
+    --dim: #6e6e73;
+    --dim-2: #a1a1a6;
+    --line: #e5e5ea;
+    --line-2: #d1d1d6;
+    --accent: #ff3b30;
+    --accent-rgb: 255, 59, 48;
+    --green: #34c759;
+    --amber: #ff9500;
+    --blue: #007aff;
+    --purple: #af52de;
+  }
+  [data-theme="premium"] {
+    --bg: #0c0d10;
+    --bg-2: #14161c;
+    --panel: #191c24;
+    --panel-2: #222634;
+    --text: #ece5d8;
+    --dim: #8d8a80;
+    --dim-2: #55534d;
+    --line: #2b2e38;
+    --line-2: #3a3e4c;
+    --accent: #e27d60;
+    --accent-rgb: 226, 125, 96;
+    --green: #7fae7b;
+    --amber: #d8a25e;
+    --blue: #7a9cc6;
+    --purple: #a28abf;
+    --sans: Georgia, "Songti SC", "PingFang SC", serif;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+  /* ===== 顶栏 ===== */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    position: relative; z-index: 30;
+  }
+  .topbar-left { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .logo-mark {
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    color: var(--accent); letter-spacing: 0.5px;
+  }
+  .proj-name { font-size: 17px; font-weight: 600; white-space: nowrap; }
+  .subtitle {
+    font-size: 12px; color: var(--dim); font-family: var(--mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+  .btn {
+    border: 1px solid var(--line-2);
+    background: var(--panel);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: border-color .15s, background .15s;
+  }
+  .btn:hover { border-color: var(--dim-2); background: var(--panel-2); }
+  .btn.primary { border-color: var(--accent); color: var(--accent); }
+  .btn.primary:hover { background: rgba(var(--accent-rgb), .12); }
+  .btn.ghost { border-color: transparent; color: var(--dim); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--line-2); }
+  .btn.active { border-color: var(--accent); color: var(--accent); background: rgba(var(--accent-rgb), .08); }
+
+  /* ===== 图例 ===== */
+  .legend {
+    display: flex; align-items: center; gap: 16px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--line);
+    font-size: 11px; color: var(--dim); font-family: var(--mono);
+    background: var(--bg);
+    position: relative; z-index: 30;
+  }
+  .legend svg { vertical-align: middle; }
+  .legend span { margin-left: 4px; }
+
+  /* ===== 主布局 ===== */
+  .main { display: flex; height: calc(100% - 96px); }
+  .canvas-wrap {
+    flex: 1; position: relative; overflow: auto;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 70%),
+      var(--bg);
+  }
+  #orgCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  #nodeLayer { position: absolute; top: 0; left: 0; }
+
+  /* ===== 节点卡片（悬浮岛）===== */
+  .node {
+    position: absolute;
+    width: 232px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color .15s, box-shadow .15s, transform .15s;
+    box-shadow: 0 2px 12px rgba(0,0,0,.25);
+    user-select: none;
+  }
+  .node:hover { border-color: var(--dim-2); transform: translateY(-2px); }
+  .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .25); }
+  .node.user-node { border-style: dashed; }
+  .node-head { display: flex; align-items: center; gap: 10px; }
+  .badge {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+    color: #0a0a0c;
+    flex-shrink: 0;
+  }
+  .node-name { font-size: 14px; font-weight: 600; line-height: 1.2; }
+  .node-role { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.35; }
+  .node-status {
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; font-family: var(--mono); color: var(--dim);
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .st-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+  /* 状态色 */
+  .c-todo { background: var(--dim-2); }
+  .c-doing { background: var(--blue); }
+  .c-blocked { background: var(--accent); }
+  .c-review { background: var(--amber); }
+  .c-done { background: var(--green); }
+
+  /* ===== 右栏读数面板 ===== */
+  .side {
+    width: 300px; flex-shrink: 0;
+    border-left: 1px solid var(--line);
+    background: var(--bg-2);
+    overflow-y: auto;
+    padding: 14px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    padding: 12px;
+  }
+  .panel-title {
+    font-size: 11px; font-family: var(--mono); letter-spacing: 1px;
+    color: var(--dim-2); margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .big-num { font-size: 28px; font-weight: 700; font-family: var(--mono); color: var(--text); }
+  .big-num.warn { color: var(--accent); }
+  .big-num.sub { font-size: 14px; color: var(--dim); }
+  .readout-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; }
+  .readout-label { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+  .readout-val { font-size: 14px; font-weight: 600; font-family: var(--mono); }
+
+  .ev-list { display: flex; flex-direction: column; gap: 8px; }
+  .ev-item {
+    font-size: 12px; color: var(--dim);
+    line-height: 1.45;
+    padding: 8px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+  }
+  .ev-item .ev-who { color: var(--text); font-weight: 500; }
+  .ev-item .ev-tag {
+    display: inline-block; font-size: 10px; font-family: var(--mono);
+    padding: 1px 5px; border-radius: 3px; margin-right: 6px;
+    border: 1px solid var(--line-2); color: var(--dim-2);
+  }
+  .ev-item .ev-tag.produce { color: var(--green); border-color: var(--green); }
+  .ev-item .ev-tag.report { color: var(--blue); border-color: var(--blue); }
+  .ev-item .ev-tag.error { color: var(--accent); border-color: var(--accent); }
+  .ev-item .ev-time { font-family: var(--mono); font-size: 10px; color: var(--dim-2); display: block; margin-top: 2px; }
+
+  .pending-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text);
+    padding: 7px 9px;
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  }
+  .pending-item .who { color: var(--dim); font-size: 11px; margin-left: auto; white-space: nowrap; }
+  .pending-empty { font-size: 12px; color: var(--dim-2); padding: 6px 2px; font-family: var(--mono); }
+
+  /* ===== 人卡浮层 ===== */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    width: 560px; max-height: 82vh; overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .modal-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 18px 20px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: var(--panel); z-index: 2;
+  }
+  .modal-head .badge { width: 44px; height: 44px; font-size: 18px; }
+  .modal-name { font-size: 16px; font-weight: 600; }
+  .modal-role { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .modal-close { margin-left: auto; cursor: pointer; color: var(--dim); font-size: 18px; border: none; background: none; }
+  .modal-close:hover { color: var(--text); }
+  .modal-sec { padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  .modal-sec-title { font-size: 11px; font-family: var(--mono); letter-spacing: 1px; color: var(--dim-2); margin-bottom: 10px; }
+  .work-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; padding: 6px 0;
+  }
+  .work-item .t-title { flex: 1; color: var(--text); }
+  .work-item .t-id { font-family: var(--mono); font-size: 10px; color: var(--dim-2); }
+  .work-empty { font-size: 12px; color: var(--dim-2); font-family: var(--mono); }
+  .chat-box {
+    display: flex; gap: 8px; margin-top: 10px;
+  }
+  .chat-box input {
+    flex: 1; background: var(--bg-2); border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm); padding: 8px 12px;
+    color: var(--text); font-size: 13px; font-family: var(--sans);
+    outline: none;
+  }
+  .chat-box input:focus { border-color: var(--accent); }
+  .chat-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 220px; overflow-y: auto; }
+  .chat-item { font-size: 12px; color: var(--dim); line-height: 1.4; }
+  .chat-item .who { color: var(--text); font-weight: 500; }
+  .chat-item .time { font-family: var(--mono); font-size: 10px; color: var(--dim-2); margin-left: 6px; }
+
+  .rel-select { display: flex; align-items: center; gap: 8px; }
+  .rel-select select {
+    background: var(--bg-2); color: var(--text); border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; font-family: var(--sans);
+    outline: none;
+  }
+  .rel-select select:focus { border-color: var(--accent); }
+
+  /* ===== 加位子弹窗 ===== */
+  .pos-form { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; }
+  .pos-form input {
+    background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+    padding: 9px 12px; color: var(--text); font-size: 13px; font-family: var(--sans); outline: none;
+  }
+  .pos-form input:focus { border-color: var(--accent); }
+  .pos-form .row { display: flex; gap: 8px; }
+  .pos-form .row input:first-child { flex: 1; }
+  .pos-form .row input:nth-child(2) { flex: 1.6; }
+  .pos-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+  /* 空态 */
+  .empty-state {
+    position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+    text-align: center; color: var(--dim); font-size: 13px; line-height: 1.8;
+  }
+  .empty-state .big { font-size: 16px; color: var(--text); margin-bottom: 6px; }
+
+  @media (max-width: 900px) {
+    .side { width: 240px; }
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="logo-mark">◆ AGENTNEXUS</span>
+      <span class="proj-name" id="projName">—</span>
+      <span class="subtitle" id="projMeta"></span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn" id="btn-board" title="切到任务看板">看板</button>
+      <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
+      <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
+      <button class="btn ghost" id="theme-toggle" onclick="toggleTheme()">A // 亮色</button>
+    </div>
+  </div>
+  <div class="legend" id="legendBar"></div>
+  <div class="main">
+    <div class="canvas-wrap" id="canvasWrap">
+      <svg id="orgCanvas"></svg>
+      <div id="nodeLayer"></div>
+      <div class="empty-state" id="emptyState" style="display:none;">
+        <div class="big">班子还没搭起来</div>
+        用右上角「＋ 加位子」把人拉进来<br>
+        或回到看板把任务派下去
+      </div>
+    </div>
+    <div class="side" id="sidePanel"></div>
+  </div>
+
+  <!-- 人卡浮层 -->
+  <div class="modal-mask" id="personModal" onclick="if(event.target===this)closePerson()">
+    <div class="modal" id="personCard"></div>
+  </div>
+
+  <!-- 加位子弹窗 -->
+  <div class="modal-mask" id="posModal" onclick="if(event.target===this)closePos()">
+    <div class="modal" style="width:420px;">
+      <div class="modal-head">
+        <div style="font-size:15px;font-weight:600;">＋ 加位子</div>
+        <button class="modal-close" onclick="closePos()">✕</button>
+      </div>
+      <div class="pos-form">
+        <input id="posName" placeholder="名字，如：试玩测试 / 前端开发 / 数据策划" maxlength="24">
+        <input id="posRole" placeholder="身份与职责，如：试玩反馈 / 验收最新版本" maxlength="60">
+        <div class="pos-actions">
+          <button class="btn" onclick="closePos()">取消</button>
+          <button class="btn primary" onclick="addPosition()">拉进来</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ===== AgentNexus · 组织视图 v2.9 ===== */
+const THEME_ORDER = ['nothing', 'apple', 'premium'];
+const THEME_NEXT_LABEL = { nothing: 'A // 亮色', apple: 'P // Premium', premium: 'N // 暗色' };
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('agentnexus_theme', t); } catch (e) {}
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = THEME_NEXT_LABEL[t] || 'A // 亮色';
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'nothing';
+  applyTheme(THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length]);
+}
+(function initTheme() {
+  let saved = 'nothing';
+  try { saved = localStorage.getItem('agentnexus_theme') || 'nothing'; } catch (e) {}
+  if (!THEME_ORDER.includes(saved)) saved = 'nothing';
+  applyTheme(saved);
+})();
+
+/* ===== 状态 ===== */
+const params = new URLSearchParams(location.search);
+const PROJECT = params.get('project') || '';
+let board = null;      // 看板数据
+let nodePos = {};      // agent_id -> {x, y, level}
+let agentById = {};
+let editMode = false;
+
+const STATUS_ORDER = ['blocked', 'doing', 'review', 'todo', 'done'];
+const STATUS_LABEL = { todo: '待做', doing: '进行中', blocked: '卡壳', review: '待验收', done: '完成' };
+const AGENT_COLORS = ['#e5484d', '#f5a524', '#30a46c', '#4c8dff', '#9c7bd8', '#f76808', '#12b5c9', '#d95d9e'];
+function colorForAgent(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AGENT_COLORS[h % AGENT_COLORS.length];
+}
+function badgeText(name) {
+  const n = (name || '?').trim();
+  return n ? Array.from(n)[0].toUpperCase() : '?';
+}
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d)) return '';
+  const p = (x) => String(x).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ===== 数据 ===== */
+async function loadBoard() {
+  const resp = await fetch('/api/board' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''));
+  if (!resp.ok) throw new Error('board 加载失败 ' + resp.status);
+  board = await resp.json();
+  agentById = {};
+  for (const a of (board.agents || [])) agentById[a.id] = a;
+  if (!board.project_info) board.project_info = {};
+  document.getElementById('projName').textContent = board.project_info.project_name || PROJECT || '未命名项目';
+  const ws = board.project_info.workspace || board.workspace || '';
+  document.getElementById('projMeta').textContent =
+    (board.project_info.project_desc ? '目标：' + board.project_info.project_desc : '') +
+    (ws ? ' · ' + ws : '');
+  renderLegend();
+  render();
+  renderSide();
+}
+
+/* ===== 布局：树形分层 ===== */
+function buildLevels() {
+  const agents = board.agents || [];
+  // 默认扁平：无 reports_to 的（user 强制第一）
+  const childrenOf = {};
+  const roots = [];
+  const byId = {};
+  for (const a of agents) {
+    byId[a.id] = a;
+    const rid = (a.reports_to || '').trim() || null;
+    if (rid && byId[rid]) {
+      (childrenOf[rid] = childrenOf[rid] || []).push(a);
+    } else {
+      roots.push(a);
+    }
+  }
+  // 排序：user 永远第一
+  roots.sort((a, b) => (a.id === 'user' ? -1 : b.id === 'user' ? 1 : 0));
+  for (const k of Object.keys(childrenOf)) childrenOf[k].sort((a, b) => (a.id === 'user' ? -1 : b.id === 'user' ? 1 : 0));
+  // BFS 分层
+  const levels = [];
+  const pos = {};
+  const queue = roots.map(r => ({ a: r, level: 0 }));
+  const visited = new Set();
+  while (queue.length) {
+    const { a, level } = queue.shift();
+    if (visited.has(a.id)) continue;
+    visited.add(a.id);
+    (levels[level] = levels[level] || []).push(a);
+    pos[a.id] = level;
+    for (const c of (childrenOf[a.id] || [])) queue.push({ a: c, level: level + 1 });
+  }
+  // 孤立节点兜底（reports_to 指向不存在的）
+  for (const a of agents) {
+    if (!visited.has(a.id)) {
+      (levels[0] = levels[0] || []).push(a);
+      pos[a.id] = 0;
+    }
+  }
+  return { levels, pos };
+}
+
+/* ===== 任务推导 ===== */
+function tasksOf(agentId) {
+  return (board.tasks || []).filter(t => t.assignee === agentId);
+}
+function agentStatus(agentId) {
+  const ts = tasksOf(agentId);
+  const active = ts.filter(t => t.status !== 'done');
+  if (!active.length) return { key: 'done', label: '手上没活', color: 'var(--green)' };
+  let worst = null;
+  for (const t of active) {
+    const k = t.status || 'todo';
+    if (!worst || STATUS_ORDER.indexOf(k) < STATUS_ORDER.indexOf(worst)) worst = k;
+  }
+  return { key: worst, label: STATUS_LABEL[worst] || worst, color: 'var(--accent)' };
+}
+
+/* ===== 渲染 ===== */
+function render() {
+  const { levels, pos } = buildLevels();
+  const layer = document.getElementById('nodeLayer');
+  const wrap = document.getElementById('canvasWrap');
+  const svg = document.getElementById('orgCanvas');
+  const W = 320, H = 108, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
+  const maxW = Math.max(...levels.map(l => l.length)) || 1;
+  const totalW = PAD_X * 2 + maxW * W + (maxW - 1) * GAP_X;
+  const totalH = TOP + levels.length * LEVEL_GAP + H + 60;
+  layer.style.width = totalW + 'px';
+  layer.style.height = totalH + 'px';
+  svg.setAttribute('width', totalW);
+  svg.setAttribute('height', totalH);
+  nodePos = {};
+  // 节点定位
+  let html = '';
+  const order = [];
+  levels.forEach((list, li) => {
+    const y = TOP + li * LEVEL_GAP;
+    const rowW = PAD_X * 2 + list.length * W + (list.length - 1) * GAP_X;
+    const startX = (totalW - rowW) / 2;
+    list.forEach((a, i) => {
+      const x = startX + i * (W + GAP_X);
+      nodePos[a.id] = { x, y, w: W, h: H, level: li };
+      order.push(a);
+      const st = agentStatus(a.id);
+      const color = a.color || colorForAgent(a.id);
+      const isUser = a.id === 'user';
+      html += `<div class="node ${isUser ? 'user-node' : ''} ${editMode ? '' : ''}" id="node-${esc(a.id)}"
+        data-id="${esc(a.id)}" onclick="openPerson('${esc(a.id)}')" style="left:${x}px;top:${y}px;">
+        <div class="node-head">
+          <div class="badge" style="background:${color};">${esc(badgeText(a.name || a.id))}</div>
+          <div>
+            <div class="node-name">${esc(a.name || a.id)}${isUser ? ' <span style="font-size:10px;color:var(--dim-2);">(我)</span>' : ''}</div>
+            <div class="node-role">${esc(a.role || '未设定身份')}</div>
+          </div>
+        </div>
+        <div class="node-status">
+          <span><span class="status-dot" style="background:${st.color};"></span>${st.label}</span>
+          <span style="color:var(--dim-2);">${tasksOf(a.id).length ? tasksOf(a.id).length + ' 任务' : '·'}</span>
+        </div>
+      </div>`;
+    });
+  });
+  layer.innerHTML = html;
+  document.getElementById('emptyState').style.display = order.length ? 'none' : 'block';
+  renderLines(order);
+}
+
+/* ===== 连线 ===== */
+function renderLines(order) {
+  const svg = document.getElementById('orgCanvas');
+  const ns = 'http://www.w3.org/2000/svg';
+  svg.innerHTML = '';
+  const defs = document.createElementNS(ns, 'defs');
+  const mkMarker = (id, color, dash) => {
+    const m = document.createElementNS(ns, 'marker');
+    m.setAttribute('id', id);
+    m.setAttribute('viewBox', '0 0 10 10');
+    m.setAttribute('refX', dash ? 4 : 8);
+    m.setAttribute('refY', '5');
+    m.setAttribute('markerWidth', '5');
+    m.setAttribute('markerHeight', '5');
+    m.setAttribute('orient', 'auto-start-reverse');
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', 'M0,0 L10,5 L0,10 z');
+    path.setAttribute('fill', color);
+    m.appendChild(path);
+    defs.appendChild(m);
+  };
+  mkMarker('arr-report', 'var(--dim-2)', false);
+  mkMarker('arr-collab', 'var(--blue)', true);
+  mkMarker('arr-dep', 'var(--amber)', true);
+  svg.appendChild(defs);
+  const CS = getComputedStyle(document.documentElement);
+  const colorVar = (v) => {
+    try { return CS.getPropertyValue(v).trim() || v; } catch (e) { return v; }
+  };
+  const dim2 = colorVar('--dim-2'), blue = colorVar('--blue'), amber = colorVar('--amber');
+  const cx = (id) => nodePos[id] ? nodePos[id].x + nodePos[id].w / 2 : null;
+  const topY = (id) => nodePos[id] ? nodePos[id].y : null;
+  const botY = (id) => nodePos[id] ? nodePos[id].y + nodePos[id].h : null;
+  const curve = (x1, y1, x2, y2) => {
+    const dy = Math.max(24, Math.abs(y2 - y1) * 0.45);
+    return `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+  };
+  const lines = [];
+  // 1) 汇报线（实线）：reports_to -> agent
+  for (const a of (board.agents || [])) {
+    const rid = (a.reports_to || '').trim();
+    if (rid && nodePos[a.id] && nodePos[rid]) {
+      lines.push({ d: curve(cx(rid), botY(rid), cx(a.id), topY(a.id)), color: dim2, dash: '', marker: 'arr-report', cls: 'report' });
+    }
+  }
+  // 2) 协作线（虚线）：同一未完成任务的不同 assignee
+  const seen = new Set();
+  for (const t of (board.tasks || [])) {
+    if (!t.assignee || t.status === 'done') continue;
+    const related = (board.tasks || []).filter(x => x.id === t.id);
+    // 依赖链上的相邻 assignee 也算协作
+    const deps = t.depends_on || [];
+    for (const depId of deps) {
+      const dep = (board.tasks || []).find(x => x.id === depId);
+      if (dep && dep.assignee && dep.assignee !== t.assignee) {
+        const key = [dep.assignee, t.assignee].sort().join('|');
+        if (!seen.has(key) && nodePos[dep.assignee] && nodePos[t.assignee]) {
+          seen.add(key);
+          lines.push({
+            d: curve(cx(dep.assignee), botY(dep.assignee), cx(t.assignee), topY(t.assignee)),
+            color: amber, dash: '3 4', marker: 'arr-dep', cls: 'dep'
+          });
+        }
+      }
+    }
+  }
+  // 3) 同任务协作：同一任务多个 assignee？当前任务模型单 assignee，跳过；改为：同一依赖组的协作
+  for (const l of lines) {
+    const g = document.createElementNS(ns, 'path');
+    g.setAttribute('d', l.d);
+    g.setAttribute('fill', 'none');
+    g.setAttribute('stroke', l.color);
+    g.setAttribute('stroke-width', '1.4');
+    if (l.dash) g.setAttribute('stroke-dasharray', l.dash);
+    g.setAttribute('marker-end', `url(#${l.marker})`);
+    g.setAttribute('opacity', '0.75');
+    svg.appendChild(g);
+  }
+}
+
+/* ===== 右栏 ===== */
+function renderSide() {
+  const side = document.getElementById('sidePanel');
+  const agents = board.agents || [];
+  const tasks = board.tasks || [];
+  const messages = board.messages || [];
+  const openTasks = tasks.filter(t => t.status !== 'done');
+  // 在等你：指派给 user 的未完成任务
+  const waitingOnMe = openTasks.filter(t => t.assignee === 'user');
+  // 未闭合
+  const pending = openTasks.filter(t => t.assignee && t.assignee !== 'user');
+  // 最近发生：messages 倒序
+  const recent = [...messages].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+  const recentN = recent.slice(-8).reverse();
+  const evTag = (text) => {
+    const t = (text || '').toLowerCase();
+    if (/(报到|接入|注册|进入)/.test(text)) return '<span class="ev-tag report">报到</span>';
+    if (/(完成|交付|产出|提交|done)/.test(text)) return '<span class="ev-tag produce">产出</span>';
+    if (/(报错|失败|错误|挂|exit|非零|blocked)/.test(t)) return '<span class="ev-tag error">报错</span>';
+    return '<span class="ev-tag">消息</span>';
+  };
+  const whoName = (id) => { const a = agentById[id]; return a ? (a.name || id) : id; };
+  side.innerHTML = `
+    <div class="panel">
+      <div class="panel-title">在等你</div>
+      <div class="big-num ${waitingOnMe.length ? 'warn' : ''}">${waitingOnMe.length}</div>
+      <div class="readout-row"><span class="readout-label">未闭合事项</span><span class="readout-val">${pending.length}</span></div>
+      <div class="readout-row"><span class="readout-label">班子成员</span><span class="readout-val">${agents.length}</span></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">未闭合事项</div>
+      ${pending.length ? pending.slice(0, 6).map(t => `
+        <div class="pending-item">
+          <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'doing' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.title)}</span>
+          <span class="who">${esc(whoName(t.assignee))}</span>
+        </div>`).join('') : '<div class="pending-empty">全部闭合，没有在途事项</div>'}
+    </div>
+    <div class="panel">
+      <div class="panel-title">最近发生</div>
+      <div class="ev-list">
+        ${recentN.length ? recentN.map(m => `
+          <div class="ev-item">
+            ${evTag(m.content)}
+            <span class="ev-who">${esc(whoName(m.sender))}</span> → ${esc(whoName(m.to))}
+            <div style="margin-top:3px;">${esc((m.content || '').slice(0, 80))}</div>
+            <span class="ev-time">${fmtTime(m.timestamp)}</span>
+          </div>`).join('') : '<div class="pending-empty">还没有消息往来</div>'}
+      </div>
+    </div>`;
+}
+
+/* ===== 人卡浮层 ===== */
+function openPerson(agentId) {
+  const a = agentById[agentId];
+  if (!a) return;
+  const st = agentStatus(agentId);
+  const color = a.color || colorForAgent(agentId);
+  const tasks = tasksOf(agentId);
+  const working = tasks.filter(t => t.status !== 'done');
+  const delivered = tasks.filter(t => t.status === 'done');
+  const messages = (board.messages || []).filter(m => m.sender === agentId || m.to === agentId)
+    .sort((x, y) => (x.timestamp || '').localeCompare(y.timestamp || ''));
+  const others = (board.agents || []).filter(o => o.id !== agentId && o.id !== 'user');
+  const selOpts = ['<option value="">— 无上级（顶层）—</option>']
+    .concat(others.map(o => `<option value="${esc(o.id)}" ${(a.reports_to || '') === o.id ? 'selected' : ''}>${esc(o.name || o.id)}</option>`))
+    .join('');
+  const whoName = (id) => { const x = agentById[id]; return x ? (x.name || id) : id; };
+  document.getElementById('personCard').innerHTML = `
+    <div class="modal-head">
+      <div class="badge" style="background:${color};">${esc(badgeText(a.name || a.id))}</div>
+      <div>
+        <div class="modal-name">${esc(a.name || a.id)} <span style="font-size:11px;color:var(--dim-2);font-family:var(--mono);">${esc(a.id)}</span></div>
+        <div class="modal-role">${esc(a.role || '未设定身份')} · <span style="color:${st.color};">${st.label}</span></div>
+      </div>
+      <button class="modal-close" onclick="closePerson()">✕</button>
+    </div>
+    <div class="modal-sec">
+      <div class="modal-sec-title">当前工作 · ${working.length}</div>
+      ${working.length ? working.map(t => `
+        <div class="work-item">
+          <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'doing' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
+          <span class="t-title">${esc(t.title)}</span>
+          <span class="t-id">${esc(t.id)}</span>
+        </div>`).join('') : '<div class="work-empty">手上没活 —— 该派活了</div>'}
+    </div>
+    <div class="modal-sec">
+      <div class="modal-sec-title">最近交付 · ${delivered.length}</div>
+      ${delivered.length ? delivered.slice(-4).reverse().map(t => `
+        <div class="work-item"><span class="st-dot c-done"></span><span class="t-title">${esc(t.title)}</span><span class="t-id">${esc(t.id)}</span></div>`).join('') : '<div class="work-empty">暂无交付</div>'}
+    </div>
+    <div class="modal-sec">
+      <div class="modal-sec-title">汇报关系</div>
+      <div class="rel-select">
+        <span style="font-size:12px;color:var(--dim);">上级：</span>
+        <select id="relSelect" onchange="saveRelation('${esc(a.id)}')">${selOpts}</select>
+        <span style="font-size:11px;color:var(--dim-2);font-family:var(--mono);">改完立即生效</span>
+      </div>
+    </div>
+    <div class="modal-sec">
+      <div class="modal-sec-title">对话 · ${messages.length}</div>
+      <div class="chat-list" id="chatList">
+        ${messages.slice(-6).map(m => `
+          <div class="chat-item"><span class="who">${esc(whoName(m.sender))}</span><span class="time">${fmtTime(m.timestamp)}</span><br>${esc((m.content || '').slice(0, 120))}</div>`).join('') || '<div class="work-empty">还没有对话</div>'}
+      </div>
+      <div class="chat-box">
+        <input id="chatInput" placeholder="给 ${esc(a.name || a.id)} 留言…" onkeydown="if(event.key==='Enter')sendMsgTo('${esc(a.id)}')">
+        <button class="btn primary" onclick="sendMsgTo('${esc(a.id)}')">发送</button>
+      </div>
+    </div>`;
+  document.getElementById('personModal').classList.add('show');
+}
+function closePerson() { document.getElementById('personModal').classList.remove('show'); }
+
+async function saveRelation(agentId) {
+  const v = document.getElementById('relSelect').value;
+  const resp = await fetch('/api/org/relation' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relations: [{ agent_id: agentId, reports_to: v }] })
+  });
+  const r = await resp.json();
+  if (r.ok) { await loadBoard(); closePerson(); }
+  else alert(r.error || '保存失败');
+}
+
+async function sendMsgTo(agentId) {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  const resp = await fetch('/api/messages' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sender: 'user', content: '@' + agentId + ' ' + text })
+  });
+  const r = await resp.json();
+  if (r.ok) { input.value = ''; await loadBoard(); openPerson(agentId); }
+  else alert(r.error || '发送失败');
+}
+
+/* ===== 加位子 ===== */
+function openPos() { document.getElementById('posModal').classList.add('show'); }
+function closePos() { document.getElementById('posModal').classList.remove('show'); }
+async function addPosition() {
+  const name = document.getElementById('posName').value.trim();
+  const role = document.getElementById('posRole').value.trim();
+  if (!name) { alert('至少给个名字'); return; }
+  const agentId = name.replace(/\s+/g, '');
+  const resp = await fetch('/api/org/position' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, name, role })
+  });
+  const r = await resp.json();
+  if (r.ok) {
+    document.getElementById('posName').value = '';
+    document.getElementById('posRole').value = '';
+    closePos();
+    await loadBoard();
+  } else alert(r.error || '添加失败');
+}
+
+/* ===== 编辑层级模式 ===== */
+function toggleEdit() {
+  editMode = !editMode;
+  document.getElementById('btn-edit').classList.toggle('active', editMode);
+  document.getElementById('legendBar').innerHTML = editMode
+    ? '编辑模式：点任意节点卡片，在「汇报关系」里选它的上级 —— 改完立即生效'
+    : defaultLegend();
+}
+
+/* ===== 图例 ===== */
+function defaultLegend() {
+  return `<svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke="var(--dim-2)" stroke-width="1.6"/></svg><span>汇报</span>
+    <svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke="var(--blue)" stroke-width="1.4" stroke-dasharray="3 3"/></svg><span>协作</span>
+    <svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke="var(--amber)" stroke-width="1.4" stroke-dasharray="2 3"/></svg><span>依赖</span>
+    <span style="margin-left:8px;color:var(--dim-2);">点卡片打开这个人 · 右上角加位子</span>`;
+}
+function renderLegend() {
+  document.getElementById('legendBar').innerHTML = defaultLegend();
+}
+
+/* ===== 绑定 ===== */
+document.getElementById('btn-board').onclick = () => {
+  location.href = 'collab_board_nothing.html' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : '');
+};
+document.getElementById('btn-position').onclick = openPos;
+document.getElementById('btn-edit').onclick = toggleEdit;
+
+(async function main() {
+  try {
+    await loadBoard();
+    // 自动刷新：30s 轮询（同看板节奏）
+    setInterval(async () => { try { await loadBoard(); } catch (e) {} }, 30000);
+  } catch (e) {
+    console.error('组织视图加载失败:', e);
+    document.getElementById('emptyState').style.display = 'block';
+    document.getElementById('emptyState').innerHTML = '<div class="big">加载失败</div>' + esc(e.message) +
+      '<br><button class="btn" style="margin-top:12px;" onclick="location.reload()">重试</button>';
+  }
+})();
+</script>
+</body>
+</html>

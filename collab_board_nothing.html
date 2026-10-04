@@ -1197,6 +1197,18 @@
   .send-btn:active { transform: scale(0.97); }
 
   /* ===== API 设置弹窗（T2.2）===== */
+  .org-btn {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    color: var(--dim);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .org-btn:hover { color: var(--text); border-color: var(--dim-2); }
   .api-settings-btn {
     padding: 6px 12px;
     background: transparent;
@@ -1508,6 +1520,7 @@
     <div class="subtitle" id="project-subtitle">LOADING...</div>
   </div>
   <div class="topbar-right">
+    <button class="org-btn" id="org-toggle" onclick="openOrgView()" title="组织架构视图">组织视图</button>
     <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色 / Premium">N // 暗色</button>
     <button class="api-settings-btn" onclick="openApiSettings()">API 设置</button>
     <div class="status-indicator">
@@ -2923,6 +2936,11 @@ function applyTheme(t) {
   if (btn) btn.textContent = THEME_NEXT_LABEL[t] || 'A // 亮色';
 }
 
+function openOrgView() {
+  const sp = new URLSearchParams(location.search);
+  const proj = sp.get('project');
+  window.location.href = '/org_chart.html' + (proj ? '?project=' + encodeURIComponent(proj) : '');
+}
 function toggleTheme() {
   const cur = document.documentElement.getAttribute('data-theme') || 'nothing';
   const idx = THEME_ORDER.indexOf(cur);

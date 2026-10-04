@@ -688,10 +688,54 @@ def save_config(data, project=None):
 
 
 # ===== Agent 入口注册（T8.1）=====
-def register_agent(project, agent_id, entry):
+def update_org_relations(project, relations):
+    """v2.9: 批量设置组织汇报关系（reports_to）
+
+    relations: [{"agent_id": "builder_1", "reports_to": "planner"}, ...]
+    reports_to 为 None/"" 表示取消上级（回到扁平）。
+    写 board_data.agents（组织图读 board），并同步 config。
+    """
+    if not relations:
+        return False, "relations 不能为空"
+    data = load_board(project)
+    agents = data.get("agents", [])
+    by_id = {a.get("id"): a for a in agents}
+    changed = []
+    for r in relations:
+        aid = str(r.get("agent_id", "")).strip()
+        rid = (r.get("reports_to") or "").strip() or None
+        if not aid or aid not in by_id:
+            continue
+        if aid == rid:
+            continue  # 不能向自己汇报
+        by_id[aid]["reports_to"] = rid
+        changed.append(aid)
+    data["agents"] = agents
+    save_board(data, project)
+    # 同步 config
+    try:
+        config = load_config(project)
+        c_agents = {a.get("id"): a for a in config.get("agents", [])}
+        for aid in changed:
+            if aid in c_agents:
+                c_agents[aid]["reports_to"] = by_id[aid].get("reports_to")
+        config["agents"] = list(c_agents.values())
+        save_config(config, project)
+    except Exception as e:
+        print(f"[v2.9] 同步 reports_to 到 config 失败: {e}")
+    return True, f"已更新 {len(changed)} 个 Agent 的汇报关系"
+
+
+def add_org_position(project, agent_id, name, role):
+    """v2.9: 组织图「加位子」——注册即创建（复用 register_agent）"""
+    return register_agent(project, agent_id, {"type": "session", "target": "组织图手动添加"}, name=name, role=role)
+
+
+def register_agent(project, agent_id, entry, name=None, role=None):
     """T8.1: 注册 Agent 入口，标记接通状态
 
     entry: {"type": "http"|"session", "target": "url或会话描述"}
+    name/role: v2.9 可选，自定义名字与身份（"加位子"用）
     注册后 connected=True，记录 registered_at / last_seen，并同步到看板。
     """
     config = load_config(project)
@@ -704,27 +748,36 @@ def register_agent(project, agent_id, entry):
             agent["connected"] = True
             agent["registered_at"] = agent.get("registered_at", now)
             agent["last_seen"] = now
+            if name:
+                agent["name"] = name
+            if role is not None:
+                agent["role"] = role
             found = True
             break
     if not found:
         # 注册即创建（Agent 首次接入自动加入列表）
         agents.append({
             "id": agent_id,
-            "name": agent_id,
-            "role": "",
+            "name": name or agent_id,
+            "role": role or "",
             "color": "#a1a1a6",
             "connected": True,
             "entry": entry,
             "registered_at": now,
-            "last_seen": now
+            "last_seen": now,
+            "reports_to": None
         })
     config["agents"] = agents
     save_config(config, project)
 
-    # 同步 agents 到看板，保持一致
+    # 同步 agents 到看板：按 id 合并，保留看板里已有的成员（v2.9 修复覆盖丢失）
     try:
         data = load_board(project)
-        data["agents"] = agents
+        merged = {a.get("id"): a for a in data.get("agents", []) if a.get("id")}
+        for a in agents:
+            if a.get("id"):
+                merged[a["id"]] = a
+        data["agents"] = list(merged.values())
         save_board(data, project)
     except Exception as e:
         print(f"[T8.1] 同步 agents 到看板失败: {e}")
@@ -1915,6 +1968,16 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._handle_create_project()
             return
 
+        # API: 组织关系（v2.9）
+        if parsed.path == "/api/org/relation":
+            self._handle_org_relation(project)
+            return
+
+        # API: 组织加位子（v2.9，复用注册）
+        if parsed.path == "/api/org/position":
+            self._handle_org_position(project)
+            return
+
         # API: 更新任务
         if parsed.path.startswith("/api/tasks/"):
             task_id = parsed.path.split("/api/tasks/")[1].strip("/")
@@ -2192,6 +2255,8 @@ class CollabHandler(SimpleHTTPRequestHandler):
 
         agent_id = (req.get("agent_id") or "").strip()
         entry = req.get("entry")
+        name = (req.get("name") or "").strip() or None
+        role = (req.get("role") or "").strip() or None
         if not agent_id:
             self._send_json({"ok": False, "error": "agent_id 不能为空"})
             return
@@ -2202,8 +2267,42 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "entry.type 必须是 http 或 session"})
             return
 
-        success, message = register_agent(project, agent_id, entry)
-        self._send_json({"ok": success, "message": message, "agent_id": agent_id})
+        success, message = register_agent(project, agent_id, entry, name=name, role=role)
+        self._send_json({"ok": success, "message": message, "agent_id": agent_id, "name": name or agent_id})
+
+    def _handle_org_relation(self, project=None):
+        """v2.9: 批量设置组织汇报关系"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            req = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+        relations = req.get("relations")
+        if not isinstance(relations, list) or not relations:
+            self._send_json({"ok": False, "error": "relations 必须是数组"})
+            return
+        success, message = update_org_relations(project, relations)
+        self._send_json({"ok": success, "message": message})
+
+    def _handle_org_position(self, project=None):
+        """v2.9: 组织图加位子（注册即创建）"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            req = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+        agent_id = (req.get("agent_id") or "").strip()
+        if not agent_id:
+            self._send_json({"ok": False, "error": "agent_id 不能为空"})
+            return
+        name = (req.get("name") or "").strip() or agent_id
+        role = (req.get("role") or "").strip()
+        success, message = add_org_position(project, agent_id, name, role)
+        self._send_json({"ok": success, "message": message, "agent_id": agent_id, "name": name})
 
     def _handle_test_connection(self, project=None):
         """测试API连接（T2.4）"""

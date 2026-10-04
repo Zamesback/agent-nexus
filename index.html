@@ -467,6 +467,11 @@
     border-radius: 3px;
     font-size: 11px;
   }
+  .board-link {
+    font-size: 11px; color: var(--dim); text-decoration: none;
+    border: 1px solid var(--line-2); padding: 5px 10px; border-radius: 6px;
+  }
+  .board-link:hover { color: var(--text); border-color: var(--dim-2); }
   .enter-btn {
     padding: 6px 14px;
     background: transparent;
@@ -1039,7 +1044,10 @@
               <span>${lastActive}</span>
               ${p.has_handoff ? '<span class="handoff-tag">📄 交接</span>' : ''}
             </div>
-            <button class="enter-btn" onclick="event.stopPropagation(); openProject('${p.name}')">进入 →</button>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <a href="/collab_board_nothing.html?project=${encodeURIComponent(p.name)}" class="board-link" onclick="event.stopPropagation();" title="任务看板">看板</a>
+              <button class="enter-btn" onclick="event.stopPropagation(); openProject('${p.name}')">组织 →</button>
+            </div>
           </div>
         `;
         grid.appendChild(card);
@@ -1057,6 +1065,10 @@
   }
 
   function openProject(name) {
+    // v2.9：默认进入组织视图（主界面），看板为二级视图
+    window.location.href = `/org_chart.html?project=${encodeURIComponent(name)}`;
+  }
+  function openBoard(name) {
     window.location.href = `/collab_board_nothing.html?project=${encodeURIComponent(name)}`;
   }
 
