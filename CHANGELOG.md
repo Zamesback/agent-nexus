@@ -2,6 +2,16 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.5] - 2026-10-04
+
+### Fixes
+
+- **Org-chart role text wraps again** (regression from v2.13.4's single-line ellipsis): role descriptions now wrap naturally, clamped to 3 lines via `-webkit-line-clamp`. Cards grew to a fixed 320×162 (geometry constants updated in sync), so connector ports stay exactly on the card edge while long roles (e.g. 美术设计's multi-discipline description) render fully.
+
+### Notes
+
+- Verified in browser on 三国指挥官: 1-line and 2-line roles both render, planner/builder out-ports still coincide with card edges (372.98 / 790), both layout directions clean.
+
 ## [v2.13.4] - 2026-10-04
 
 ### Fixes

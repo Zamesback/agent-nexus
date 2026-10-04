@@ -184,7 +184,7 @@
   .node {
     position: absolute;
     width: 320px;
-    height: 132px;
+    height: 162px;
     box-sizing: border-box;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -209,9 +209,9 @@
     flex-shrink: 0;
   }
   .node-name { font-size: 14px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .node-role { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .node-role { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.35; white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; max-width: 100%; }
   .node-status {
-    margin-top: 8px; padding-top: 7px;
+    margin-top: 6px; padding-top: 6px;
     border-top: 1px solid var(--line);
     display: flex; align-items: center; justify-content: space-between;
     font-size: 11px; font-family: var(--mono); color: var(--dim);
@@ -616,7 +616,7 @@ function render() {
   const { levels, pos } = buildLevels();
   const layer = document.getElementById('nodeLayer');
   const svg = document.getElementById('orgCanvas');
-  const W = 320, H = 132, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
+  const W = 320, H = 162, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
   const LAYER_GAP_X = 430, COL_GAP_Y = 30;
   let LAYOUT_DIR = 'lr';
   try { LAYOUT_DIR = localStorage.getItem('agentnexus_layout_' + PROJECT) || 'lr'; } catch (e) {}
