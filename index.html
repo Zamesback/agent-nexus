@@ -633,6 +633,20 @@
   }
   .form-group textarea { min-height: 90px; resize: vertical; font-family: var(--mono); font-size: 14px; }
   .form-group .hint { font-family: var(--mono); font-size: 12px; color: var(--dim-2); margin-top: 6px; }
+
+  .ws-modes { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .ws-mode {
+    flex: 1; min-width: 200px;
+    border: 1px solid var(--border, #e5e5ea);
+    border-radius: 10px; padding: 10px 12px;
+    cursor: pointer; display: flex; gap: 8px; align-items: flex-start;
+    background: var(--bg, #fff);
+  }
+  .ws-mode:hover { border-color: var(--accent, #e5484d); }
+  .ws-mode input { margin-top: 3px; }
+  .ws-mode strong { display: block; font-size: 13px; }
+  .ws-mode em { font-style: normal; font-size: 11px; color: var(--dim, #6e6e73); }
+  .ws-mode.selected { border-color: var(--accent, #e5484d); box-shadow: 0 0 0 1px var(--accent, #e5484d); }
   .agent-checkboxes { display: flex; gap: 8px; flex-wrap: wrap; }
   .agent-checkbox {
     display: flex; align-items: center; gap: 8px;
@@ -868,9 +882,17 @@
       </div>
     </div>
     <div class="form-group">
-      <label>工作区路径</label>
-      <input type="text" id="workspace" placeholder="如：~/Projects/akkodis" />
-      <div class="hint">可选，项目相关文件的存放位置</div>
+      <label>工作区 <span class="hint">项目相关文件的存放位置</span></label>
+      <div class="ws-modes">
+        <label class="ws-mode"><input type="radio" name="wsMode" value="new" checked onchange="wsModeChanged()" />
+          <span><strong>新建工作区</strong><em>推荐 · 全新项目</em></span></label>
+        <label class="ws-mode"><input type="radio" name="wsMode" value="existing" onchange="wsModeChanged()" />
+          <span><strong>关联已有工作区</strong><em>项目自带目录，直接进入</em></span></label>
+      </div>
+      <div id="ws-existing-row" style="display:none;">
+        <input type="text" id="workspace" placeholder="如：~/Projects/akkodis 或 /Users/you/Desktop/my-project" />
+        <div class="hint">必须是已存在的目录；工具不会复制或新建，只做关联</div>
+      </div>
     </div>
     <div class="form-group">
       <label>交接文件 / 项目背景</label>
@@ -1112,11 +1134,18 @@
   }
   function closeModal() { document.getElementById('createModal').classList.remove('active'); }
 
+  function wsModeChanged() {
+    const mode = document.querySelector('input[name="wsMode"]:checked').value;
+    document.getElementById('ws-existing-row').style.display = (mode === 'existing') ? 'block' : 'none';
+    document.querySelectorAll('.ws-mode').forEach(l => l.classList.toggle('selected', l.querySelector('input').checked));
+  }
+
   async function createProject() {
     const projectName = document.getElementById('projectName').value.trim();
     const projectTitle = document.getElementById('projectTitle').value.trim();
     const description = document.getElementById('projectDesc').value.trim();
-    const workspace = document.getElementById('workspace').value.trim();
+    const wsMode = document.querySelector('input[name="wsMode"]:checked').value;
+    const workspace = wsMode === 'existing' ? document.getElementById('workspace').value.trim() : '';
     const handoff = document.getElementById('handoff').value.trim();
     if (!projectName) { alert('请输入项目标识'); return; }
     const agents = collectAgents();
@@ -1124,12 +1153,12 @@
       const resp = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_name: projectName, project_title: projectTitle, description: description, agents: agents, workspace: workspace, handoff: handoff })
+        body: JSON.stringify({ project_name: projectName, project_title: projectTitle, description: description, agents: agents, workspace: workspace, workspace_mode: wsMode, handoff: handoff })
       });
       const data = await resp.json();
       if (data.ok) {
         closeModal();
-        alert('项目创建成功！');
+        alert('项目创建成功！\n工作区：' + (data.workspace || '已自动创建 workspace/ 子目录') + (data.workspace_status === 'existing' ? '（已关联）' : '（已新建）'));
         window.location.href = data.board_url;
       } else {
         alert('创建失败: ' + (data.error || '未知错误'));

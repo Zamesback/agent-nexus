@@ -353,7 +353,36 @@ Content-Type: application/json
 """
 
 
-def create_project(project_name, agents=None, workspace="", handoff="", project_title="", description=""):
+def _resolve_workspace(project_path, workspace, mode):
+    """解析工作区：
+    - mode=='new'：空路径 -> 项目内 workspace/ 子目录；非空路径 -> 创建该目录
+    - mode=='existing'：路径必须已存在（目录），否则报错
+    - 其他（auto/向后兼容）：空 -> 项目内 workspace/ 子目录；非空 -> 存在则关联、不存在则创建
+    返回 (workspace_str, status, message)
+    """
+    ws = (workspace or "").strip()
+    if mode == "existing":
+        if not ws:
+            return "", "error", "关联已有工作区需要填写路径"
+        p = os.path.abspath(os.path.expanduser(ws))
+        if not os.path.isdir(p):
+            return "", "error", f"路径不存在：{p}（请检查，或改选「新建工作区」）"
+        return p, "existing", f"已关联已有工作区：{p}"
+    # new / auto：空则默认项目内 workspace/ 子目录
+    if not ws:
+        p = os.path.join(project_path, "workspace")
+    else:
+        p = os.path.abspath(os.path.expanduser(ws))
+    if os.path.isdir(p):
+        return p, "existing", f"已关联已有工作区：{p}"
+    try:
+        os.makedirs(p, exist_ok=True)
+        return p, "created", f"已新建工作区：{p}"
+    except OSError as e:
+        return ws, "error", f"工作区创建失败：{e}"
+
+
+def create_project(project_name, agents=None, workspace="", handoff="", project_title="", description="", workspace_mode=""):
     """创建新项目
 
     Args:
@@ -372,16 +401,25 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
 
     # 安全检查
     if not project_name or not project_name.strip():
-        return False, "项目名不能为空", None
+        return False, "项目名不能为空", None, "", ""
     if ".." in project_name or "/" in project_name or "\\" in project_name:
-        return False, "项目名不能包含路径分隔符", None
+        return False, "项目名不能包含路径分隔符", None, "", ""
 
     project_path = os.path.join(PROJECTS_ROOT, project_name.strip())
     if os.path.exists(project_path):
-        return False, f"项目 '{project_name}' 已存在", None
+        return False, f"项目 '{project_name}' 已存在", None, "", ""
 
     # 创建项目文件夹
+    existed_before = os.path.exists(project_path)
     os.makedirs(project_path, exist_ok=True)
+
+    # 工作区解析（v2.11：新建 / 关联已有 二选一）
+    resolved_workspace, ws_status, ws_message = _resolve_workspace(project_path, workspace, workspace_mode)
+    if ws_status == "error":
+        if not existed_before:
+            try: os.rmdir(project_path)  # 回滚刚创建的空目录
+            except OSError: pass
+        return False, ws_message, None, "", ""
 
     # 默认Agent定义
     all_agents = {
@@ -433,7 +471,9 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
             "name": project_title or project_name,
             "description": description or "",
             "created": now,
-            "version": "1.0"
+            "version": "1.0",
+            "workspace": resolved_workspace,
+            "workspace_status": ws_status
         },
         "agents": selected_agents,
         "tasks": [],
@@ -441,7 +481,7 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
             {
                 "id": 1,
                 "sender": "system",
-                "content": f"项目 '{project_title or project_name}' 已创建。\n\n接入Agent: {', '.join([a['name'] for a in selected_agents])}\n工作区: {workspace or '未指定'}\n\n{handoff or '暂无交接文件'}",
+                "content": f"项目 '{project_title or project_name}' 已创建。\n\n接入Agent: {', '.join([a['name'] for a in selected_agents])}\n工作区: {resolved_workspace or '未指定'}（{ws_status}）\n\n{handoff or '暂无交接文件'}",
                 "timestamp": now,
                 "type": "system"
             }
@@ -456,7 +496,7 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
     # 创建项目配置
     config_data = {
         "project_name": project_title or project_name,
-        "workspace": workspace or "",
+        "workspace": resolved_workspace,
         "agents": agents,
         "handoff": handoff or "",
         "api_config": {
@@ -502,7 +542,7 @@ def create_project(project_name, agents=None, workspace="", handoff="", project_
     except Exception as e:
         print(f"[T9.1] 生成接入引导失败: {e}")
 
-    return True, "项目创建成功", project_path
+    return True, "项目创建成功", project_path, resolved_workspace, ws_status
 
 
 def delete_project(project_name, scope="data_only"):
@@ -619,7 +659,19 @@ def load_board(project=None):
     board_file = files["board_file"]
     with file_lock(board_file, exclusive=False):
         with open(board_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+    # v2.11：project_info 补工作区（旧项目 board 里没有，从 config 补；兼容 str/dict）
+    try:
+        pi = data.setdefault("project_info", {})
+        if not pi.get("workspace"):
+            cfg = load_config(project)
+            ws = cfg.get("workspace", "")
+            if isinstance(ws, dict):
+                ws = ws.get("path", "")
+            pi["workspace"] = ws
+    except Exception:
+        pass
+    return data
 
 
 def save_board(data, project=None):
@@ -2095,15 +2147,17 @@ class CollabHandler(SimpleHTTPRequestHandler):
         description = req.get("description", "").strip()
         agents = req.get("agents", ["user", "planner", "builder"])
         workspace = req.get("workspace", "").strip()
+        workspace_mode = (req.get("workspace_mode") or "").strip()
         handoff = req.get("handoff", "").strip()
 
-        success, message, project_path = create_project(
+        success, message, project_path, resolved_workspace, ws_status = create_project(
             project_name=project_name,
             agents=agents,
             workspace=workspace,
             handoff=handoff,
             project_title=project_title,
-            description=description
+            description=description,
+            workspace_mode=workspace_mode
         )
 
         if success:
@@ -2112,6 +2166,8 @@ class CollabHandler(SimpleHTTPRequestHandler):
                 "message": message,
                 "project_name": project_name,
                 "project_path": project_path,
+                "workspace": resolved_workspace or "",
+                "workspace_status": ws_status or "",
                 "board_url": f"/collab_board_nothing.html?project={project_name}"
             })
         else:

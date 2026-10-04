@@ -2,6 +2,21 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.11.0] - 2026-10-04
+
+### New Features
+
+- **Workspace create-or-link choice in the project wizard**: when creating a project you now pick one of two workspace modes
+  - **新建工作区 (create, default)**: a `workspace/` sub-directory is created inside the project folder — for brand-new projects with no workspace yet
+  - **关联已有工作区 (link existing)**: fill in the path of a directory the project already has — the board links to it directly, and **no second workspace is created** (no more duplicate workspaces for projects that carry their own folder)
+  - Linking a non-existent path fails with a clear error and the project folder is rolled back (no empty leftovers)
+- Board data now records the resolved workspace (`project_info.workspace` + `workspace_status`: created / existing) so the org view can show where project files live; older projects get their workspace back-filled from `project_config.json` on load (string or `{path,name}` object shapes both supported)
+
+### Notes
+
+- Three scenarios verified via API: create (workspace/ created), link existing (linked, no duplicate folder), link missing path (error + rollback). Wizard radio switch verified in browser.
+- No schema migration needed: legacy projects keep their workspace field as-is.
+
 ## [v2.10.0] - 2026-10-04
 
 ### New Features
