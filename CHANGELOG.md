@@ -2,6 +2,16 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.4] - 2026-10-04
+
+### Fixes
+
+- **Org-chart lines no longer "vanish" at the node edge**: node cards were 232px wide in CSS while connector geometry assumed 320px — every line started ~88px inside the node and was hidden behind the card, appearing as a broken/segmented line (reported on 三国指挥官 for planner and 美术设计). Node cards are now a fixed 320×132 box (box-sizing: border-box, text ellipsized) matching the geometry constants, so connector endpoints sit exactly on the card edge in every layout, after drags, and in both directions.
+
+### Notes
+
+- Verified in browser: planner/builder out-ports coincide with the real right edge of their cards (372.98 / 790), junction dots follow, both layout directions clean.
+
 ## [v2.13.3] - 2026-10-04
 
 ### Fixes

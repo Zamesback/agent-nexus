@@ -183,7 +183,9 @@
   /* ===== 节点卡片（悬浮岛）===== */
   .node {
     position: absolute;
-    width: 232px;
+    width: 320px;
+    height: 132px;
+    box-sizing: border-box;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
@@ -192,6 +194,7 @@
     transition: border-color .15s, box-shadow .15s, transform .15s;
     box-shadow: 0 2px 12px rgba(0,0,0,.25);
     user-select: none;
+    overflow: hidden;
   }
   .node.dragging { cursor: grabbing; box-shadow: 0 14px 36px rgba(0,0,0,.35); z-index: 50; }
   .node:hover { border-color: var(--dim-2); transform: translateY(-2px); }
@@ -205,10 +208,10 @@
     color: #0a0a0c;
     flex-shrink: 0;
   }
-  .node-name { font-size: 14px; font-weight: 600; line-height: 1.2; }
-  .node-role { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.35; }
+  .node-name { font-size: 14px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .node-role { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .node-status {
-    margin-top: 10px; padding-top: 8px;
+    margin-top: 8px; padding-top: 7px;
     border-top: 1px solid var(--line);
     display: flex; align-items: center; justify-content: space-between;
     font-size: 11px; font-family: var(--mono); color: var(--dim);
@@ -613,7 +616,7 @@ function render() {
   const { levels, pos } = buildLevels();
   const layer = document.getElementById('nodeLayer');
   const svg = document.getElementById('orgCanvas');
-  const W = 320, H = 108, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
+  const W = 320, H = 132, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
   const LAYER_GAP_X = 430, COL_GAP_Y = 30;
   let LAYOUT_DIR = 'lr';
   try { LAYOUT_DIR = localStorage.getItem('agentnexus_layout_' + PROJECT) || 'lr'; } catch (e) {}
