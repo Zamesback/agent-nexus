@@ -680,6 +680,29 @@ def load_board(project=None):
     return data
 
 
+
+_LAST_GIT_COMMIT = {}
+
+def _auto_git_commit(board_file):
+    """v2.14.2: 看板保存后自动 git 提交，每次写盘都留历史快照。
+    若目录未纳入 git（无仓库/文件不在仓库内）则静默跳过。"""
+    try:
+        if not board_file:
+            return
+        abs_f = os.path.abspath(board_file)
+        root = os.path.abspath(PROJECTS_ROOT)
+        if not abs_f.startswith(root + os.sep):
+            return
+        rel = os.path.relpath(abs_f, root)
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        import subprocess as _sp
+        _sp.run(["git", "-C", root, "add", "--", rel], capture_output=True, timeout=15)
+        _sp.run(["git", "-C", root, "commit", "-m", "board: %s %s" % (rel, now)],
+                capture_output=True, timeout=15)
+    except Exception:
+        pass
+
+
 def save_board(data, project=None):
     """保存看板数据（排他锁 + 原子写入）
     project: 项目名，None表示使用当前目录（向后兼容）
@@ -694,6 +717,8 @@ def save_board(data, project=None):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, board_file)
+    _auto_git_commit(board_file)   # v2.14.2：保存后自动留版本快照（防直接编辑覆盖丢数据）
+    return board_file
 
 
 def _normalize_config_agents(data):
@@ -1872,7 +1897,7 @@ def _append_agent_message(agent_id, agent_name, content):
     """把Agent的回复追加到看板消息中"""
     with board_lock:
         data = load_board()
-        new_id = max([m["id"] for m in data["messages"]], default=0) + 1
+        new_id = max([int(m["id"]) for m in data["messages"] if str(m.get("id", "")).isdigit()], default=0) + 1
         new_msg = {
             "id": new_id,
             "sender": agent_id,
@@ -1894,7 +1919,7 @@ def _append_system_message(content, project=None):
         return
     with board_lock:
         data = load_board(project)
-        new_id = max([m["id"] for m in data["messages"]], default=0) + 1
+        new_id = max([int(m["id"]) for m in data["messages"] if str(m.get("id", "")).isdigit()], default=0) + 1
         new_msg = {
             "id": new_id,
             "sender": "system",
@@ -2619,7 +2644,7 @@ class CollabHandler(SimpleHTTPRequestHandler):
 
         with board_lock:
             data = load_board(project)
-            new_id = max([m["id"] for m in data["messages"]], default=0) + 1
+            new_id = max([int(m["id"]) for m in data["messages"] if str(m.get("id", "")).isdigit()], default=0) + 1
             new_msg = {
                 "id": new_id,
                 "sender": msg["sender"],
@@ -2922,7 +2947,7 @@ class CollabHandler(SimpleHTTPRequestHandler):
         """追加系统消息（不带锁版本，调用方需已持锁或单独加锁）"""
         with board_lock:
             data = load_board(project)
-            new_id = max([m["id"] for m in data["messages"]], default=0) + 1
+            new_id = max([int(m["id"]) for m in data["messages"] if str(m.get("id", "")).isdigit()], default=0) + 1
             data["messages"].append({
                 "id": new_id,
                 "sender": "system",
