@@ -400,6 +400,7 @@
       <button class="btn" id="btn-board" title="切到任务看板">看板</button>
       <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
+      <button class="btn ghost" id="btn-layout" onclick="toggleLayout()" title="切换组织图布局方向（左右/上下）">⇄ 左右</button>
       <button class="btn ghost" id="btn-reset" onclick="resetLayout()" title="恢复自动布局">重置布局</button>
       <button class="btn ghost" id="theme-toggle" onclick="toggleTheme()">A // 亮色</button>
     </div>
@@ -611,12 +612,23 @@ function agentStatus(agentId) {
 function render() {
   const { levels, pos } = buildLevels();
   const layer = document.getElementById('nodeLayer');
-  const wrap = document.getElementById('canvasWrap');
   const svg = document.getElementById('orgCanvas');
   const W = 320, H = 108, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
+  const LAYER_GAP_X = 380, COL_GAP_Y = 30;
+  let LAYOUT_DIR = 'lr';
+  try { LAYOUT_DIR = localStorage.getItem('agentnexus_layout_' + PROJECT) || 'lr'; } catch (e) {}
+  const lr = LAYOUT_DIR === 'lr';
+  const lbl = document.getElementById('btn-layout');
+  if (lbl) lbl.textContent = lr ? '⇄ 左右' : '⇄ 上下';
   const maxW = Math.max(...levels.map(l => l.length)) || 1;
-  const totalW = PAD_X * 2 + maxW * W + (maxW - 1) * GAP_X;
-  const totalH = TOP + levels.length * LEVEL_GAP + H + 60;
+  let totalW, totalH;
+  if (lr) {
+    totalW = PAD_X * 2 + (levels.length - 1) * LAYER_GAP_X + W;
+    totalH = TOP + maxW * H + (maxW - 1) * COL_GAP_Y + 60;
+  } else {
+    totalW = PAD_X * 2 + maxW * W + (maxW - 1) * GAP_X;
+    totalH = TOP + levels.length * LEVEL_GAP + H + 60;
+  }
   layer.style.width = totalW + 'px';
   layer.style.height = totalH + 'px';
   svg.setAttribute('width', totalW);
@@ -627,12 +639,19 @@ function render() {
   const order = [];
   window.orderCache = order;
   levels.forEach((list, li) => {
-    const y = TOP + li * LEVEL_GAP;
-    const rowW = PAD_X * 2 + list.length * W + (list.length - 1) * GAP_X;
-    const startX = (totalW - rowW) / 2;
+    let baseX, baseY;
+    if (lr) {
+      baseX = PAD_X + li * LAYER_GAP_X;
+      const colH = list.length * H + (list.length - 1) * COL_GAP_Y;
+      baseY = Math.max(TOP, (totalH - colH) / 2);
+    } else {
+      const rowW = PAD_X * 2 + list.length * W + (list.length - 1) * GAP_X;
+      baseX = (totalW - rowW) / 2;
+      baseY = TOP + li * LEVEL_GAP;
+    }
     list.forEach((a, i) => {
-      let x = startX + i * (W + GAP_X);
-      let yNode = y;
+      let x = baseX + (lr ? 0 : i * (W + GAP_X));
+      let yNode = baseY + (lr ? i * (H + COL_GAP_Y) : 0);
       // v2.12：恢复手动拖拽位置（按 项目+agent 存 localStorage）
       try {
         const saved = JSON.parse(localStorage.getItem('agentnexus_pos_' + PROJECT + '_' + a.id));
@@ -711,6 +730,15 @@ function enableNodeDrag() {
   });
 }
 
+/* ===== 布局方向切换（v2.13.1） ===== */
+function toggleLayout() {
+  let cur = 'lr';
+  try { cur = localStorage.getItem('agentnexus_layout_' + PROJECT) || 'lr'; } catch (e) {}
+  const next = cur === 'lr' ? 'tb' : 'lr';
+  try { localStorage.setItem('agentnexus_layout_' + PROJECT, next); } catch (e) {}
+  resetLayout();
+}
+
 /* ===== 重置布局（v2.12） ===== */
 function resetLayout() {
   if (!PROJECT) return;
@@ -751,19 +779,38 @@ function renderLines(order) {
     try { return CS.getPropertyValue(v).trim() || v; } catch (e) { return v; }
   };
   const dim2 = colorVar('--dim-2'), blue = colorVar('--blue'), amber = colorVar('--amber');
-  const cx = (id) => nodePos[id] ? nodePos[id].x + nodePos[id].w / 2 : null;
-  const topY = (id) => nodePos[id] ? nodePos[id].y : null;
-  const botY = (id) => nodePos[id] ? nodePos[id].y + nodePos[id].h : null;
-  const curve = (x1, y1, x2, y2) => {
-    const dy = Math.max(24, Math.abs(y2 - y1) * 0.45);
-    return `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+  const lr = (() => { try { return (localStorage.getItem('agentnexus_layout_' + PROJECT) || 'lr') === 'lr'; } catch (e) { return true; } })();
+  // 端口：out = 父侧出线端（下/右），in = 子侧入线端（上/左）
+  const port = (id, dir) => {
+    const p = nodePos[id]; if (!p) return null;
+    if (lr) return dir === 'out' ? { x: p.x + p.w, y: p.y + p.h / 2 } : { x: p.x, y: p.y + p.h / 2 };
+    return dir === 'out' ? { x: p.x + p.w / 2, y: p.y + p.h } : { x: p.x + p.w / 2, y: p.y };
+  };
+  // 横平竖直 + 圆角折弯的正交线（v2.13.1）
+  const ortho = (x1, y1, x2, y2) => {
+    const R = 14;
+    if (lr) {
+      if (Math.abs(y1 - y2) < 1) return `M${x1},${y1} L${x2},${y2}`;
+      const mx = (x1 + x2) / 2;
+      const r = Math.max(0, Math.min(R, Math.abs(mx - x1) / 2, Math.abs(x2 - mx) / 2));
+      if (r < 2) return `M${x1},${y1} L${x1},${y2} L${x2},${y2}`;
+      const sgn = y2 > y1 ? 1 : -1;
+      return `M${x1},${y1} L${mx - r},${y1} Q${mx},${y1} ${mx},${y1 + sgn * r} L${mx},${y2 - sgn * r} Q${mx},${y2} ${mx + r},${y2} L${x2},${y2}`;
+    }
+    if (Math.abs(x1 - x2) < 1) return `M${x1},${y1} L${x2},${y2}`;
+    const my = (y1 + y2) / 2;
+    const r = Math.max(0, Math.min(R, Math.abs(my - y1) / 2, Math.abs(y2 - my) / 2));
+    if (r < 2) return `M${x1},${y1} L${x2},${y1} L${x2},${y2}`;
+    const sgn = x2 > x1 ? 1 : -1;
+    return `M${x1},${y1} L${x1},${my - sgn * r} Q${x1},${my} ${x1 + sgn * r},${my} L${x2 - sgn * r},${my} Q${x2},${my} ${x2},${my + sgn * r} L${x2},${y2}`;
   };
   const lines = [];
   // 1) 汇报线（实线）：reports_to -> agent
   for (const a of (board.agents || [])) {
     const rid = (a.reports_to || '').trim();
     if (rid && nodePos[a.id] && nodePos[rid]) {
-      lines.push({ d: curve(cx(rid), botY(rid), cx(a.id), topY(a.id)), color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6 });
+      const o1 = port(rid, 'out'), i1 = port(a.id, 'in');
+      if (o1 && i1) lines.push({ d: ortho(o1.x, o1.y, i1.x, i1.y), color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6 });
     }
   }
   // 2) 协作线（虚线）：同一未完成任务的不同 assignee
@@ -781,7 +828,7 @@ function renderLines(order) {
         if (!seen.has(key) && nodePos[dep.assignee] && nodePos[t.assignee]) {
           seen.add(key);
           lines.push({
-            d: curve(cx(dep.assignee), botY(dep.assignee), cx(t.assignee), topY(t.assignee)),
+            d: (() => { const o2 = port(dep.assignee, 'out'), i2 = port(t.assignee, 'in'); return (o2 && i2) ? ortho(o2.x, o2.y, i2.x, i2.y) : ''; })(),
             color: amber, dash: '3 4', marker: 'arr-dep', cls: 'dep', width: 1.2
           });
         }

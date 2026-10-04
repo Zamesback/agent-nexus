@@ -2,6 +2,18 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.1] - 2026-10-04
+
+### Improvements
+
+- **Orthogonal org-chart connectors**: report & dependency lines are now clean right-angle paths with rounded corners (horizontal/vertical runs instead of Bezier S-curves) — tidier and easier to follow.
+- **Layout direction toggle**: new "⇄ 左右/上下" button on the org view top bar switches between left-right and top-down layouts (per-project preference, persisted). Left-right is the new default: it uses vertical space, keeps the canvas narrow, and reads naturally as a tree; top-down remains one click away.
+
+### Notes
+
+- Drag positions still override auto-layout; switching direction resets to auto-layout for a clean tree. Connector styles (report solid / dependency dashed + opacity layering) unchanged.
+- Verified in browser: rounded-corner path output (Q segments) in both directions, no parent-child overlap with the widened 380px column gap, drag re-render keeps orthogonal lines.
+
 ## [v2.13.0] - 2026-10-04
 
 ### New Features
