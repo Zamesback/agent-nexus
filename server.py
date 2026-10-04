@@ -856,6 +856,10 @@ def build_guide(project, agent_id, name, role):
 【协作方式】
 这个项目使用「协同看板」工作：任务、消息、决策都记录在项目目录下的 collab_board.json（或通过 /api/board?project={project} 读取）。你的所有工作都在看板上留痕。
 
+【数据安全 · 看板 JSON 红线】
+- collab_board.json 的 agents 数组是班子名单，**禁止直接编辑或覆盖**；增减成员一律走组织视图「拉人进班子」或 /api/agents/* 接口。
+- 如确需直接编辑看板 JSON：必须先 GET /api/board 拉取最新内容，保存时确保 agents 数组与拉取时完全一致（只允许追加 messages / 修改 tasks 字段）；任何覆盖保存都可能把别人刚加进来的成员写丢。
+
 【协作协议 · 工作态/收工态】
 - 看板顶层 protocol.mode 是项目当前协作状态：
   · working（工作态）：认领任务后，每 30 分钟自动检查任务看板对齐一次——有任务就开工、有交付就标记待验收、有验收就收尾；被 @ 的消息及时响应。

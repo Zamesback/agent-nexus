@@ -2,6 +2,11 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+### Fix: agents list overwritten by direct JSON edit (data-safety hardening)
+
+- On 三国指挥官, three members (Builder 4试玩反馈 / builder5 / builder6) silently disappeared from the org chart. Root cause: an agent edited collab_board.json directly to feed T70 and saved from a stale snapshot, overwriting the agents array back to 5 entries (its own backup `.bak_t70_193250` still had 8; `.bak_t70feed_193934` had 5). Restored all 8 members from that backup, keeping current messages/tasks.
+- **Onboarding guides now include a data-safety section**: the agents array is the roster — never edit or overwrite it directly; add/remove members only via the org view or /api/agents/*. If you must edit the board JSON directly, always GET /api/board first and keep the agents array identical on save (only append messages / modify tasks). A system message was left on the board about the restore.
+
 ## [v2.14.0] - 2026-10-04
 
 ### New: Work / Wrap-up collaboration protocol
