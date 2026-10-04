@@ -2,6 +2,16 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.14.2] - 2026-10-04
+
+### Project data layer now under git version control (auto-commit on save)
+
+- `agent-collab-projects/` (all project boards + docs) initialized as a git repo; `.gitignore` excludes `.DS_Store`, `*.lock`, `collab_board.json.bak*` backups and `Mentor社区/videos/`.
+- `save_board()` now auto-commits the board file after every write, so every message / claim / status change leaves a recoverable snapshot — a direct-JSON overwrite like the one that lost three 三国指挥官 members can now be rolled back instantly.
+- Fixed message id mixed-type crash: agents editing JSON directly had written string ids (5 messages on 三国指挥官), breaking `max([m["id"]...])`. All id computations are now type-tolerant, and the 5 string ids were normalized back to integers.
+
+## [v2.14.1] - 2026-10-04
+
 ### Fix: agents list overwritten by direct JSON edit (data-safety hardening)
 
 - On 三国指挥官, three members (Builder 4试玩反馈 / builder5 / builder6) silently disappeared from the org chart. Root cause: an agent edited collab_board.json directly to feed T70 and saved from a stale snapshot, overwriting the agents array back to 5 entries (its own backup `.bak_t70_193250` still had 8; `.bak_t70feed_193934` had 5). Restored all 8 members from that backup, keeping current messages/tasks.
