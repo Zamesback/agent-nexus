@@ -1523,6 +1523,7 @@
   </div>
   <div class="topbar-right">
     <button class="org-btn" id="home-toggle" onclick="location.href='/index.html'" title="回到项目总表">← 项目总表</button>
+    <button class="org-btn" id="protocol-toggle" onclick="openBoardProtocol()" title="协作协议：开工/收工 + 豁免">⚡ 工作</button>
     <button class="org-btn" id="org-toggle" onclick="openOrgView()" title="组织架构视图">组织视图</button>
     <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色 / Premium">N // 暗色</button>
     <button class="api-settings-btn" onclick="openApiSettings()">API 设置</button>
@@ -1590,6 +1591,12 @@
 </div>
 
 <!-- API 设置弹窗（T2.2） -->
+<div class="overlay" id="proto-overlay" onclick="closeBoardProtocol()"></div>
+<div class="api-modal" id="proto-modal" style="width:560px;">
+  <span class="close" onclick="closeBoardProtocol()">✕</span>
+  <h3>协作协议 // 开工/收工</h3>
+  <div id="proto-body" style="font-size:13px;line-height:1.7;"></div>
+</div>
 <div class="overlay" id="api-overlay" onclick="closeApiSettings()"></div>
 <div class="api-modal" id="api-modal">
   <span class="close" onclick="closeApiSettings()">✕</span>
@@ -1843,6 +1850,7 @@ async function loadBoard() {
         : (boardData.name ? boardData.name : 'AGENT NEXUS');
     }
     document.getElementById('status-text').textContent = 'LIVE';
+    updateProtocolBtn();
   } catch (e) {
     document.getElementById('status-text').textContent = 'OFFLINE';
     console.error('加载看板失败:', e);
@@ -2948,6 +2956,77 @@ function applyTheme(t) {
   if (btn) btn.textContent = THEME_NEXT_LABEL[t] || 'A // 亮色';
 }
 
+
+/* ===== 协作协议：开工/收工 + 豁免（v2.14） ===== */
+function boardProto() {
+  return (boardData && boardData.protocol) || { mode: 'working', exemptions: [] };
+}
+function updateProtocolBtn() {
+  const btn = document.getElementById('protocol-toggle');
+  if (!btn) return;
+  const off = boardProto().mode === 'off';
+  btn.textContent = off ? '🌙 收工' : '⚡ 工作';
+  btn.title = off ? '当前收工态 — 点击开工' : '当前工作态 — 点击收工';
+  btn.style.opacity = off ? '0.75' : '1';
+}
+function openBoardProtocol() {
+  const body = document.getElementById('proto-body');
+  if (!body) return;
+  const off = boardProto().mode === 'off';
+  const agents = (boardData.agents || []).filter(a => a.id !== 'user');
+  const exempts = boardProto().exemptions || [];
+  const now = boardProto().updated_at || '';
+  body.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:12px;background:var(--panel);">
+      <span style="font-size:18px;">${off ? '🌙' : '⚡'}</span>
+      <div style="flex:1;">
+        <div style="font-weight:600;">${off ? '收工态' : '工作态'}</div>
+        <div style="font-size:11px;color:var(--dim);">${now ? '最近切换：' + now : '尚未切换过'}</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:10px;">
+      ${off
+        ? '全员已收工：Agent 停止主动轮询与认领，保留被动响应。'
+        : '工作态约定：认领任务后每 30 分钟自动对齐看板。'}
+    </div>
+    ${off ? '' : `
+    <div style="font-size:12px;color:var(--dim);margin-bottom:8px;">收工后豁免以下成员（继续按工作态执行）：</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+      ${agents.map(a => `
+        <label style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;">
+          <input type="checkbox" class="proto-exempt" value="${escapeHtml(a.id)}" ${exempts.indexOf(a.id) >= 0 ? 'checked' : ''} style="accent-color:var(--accent);">
+          ${escapeHtml(a.name || a.id)}
+        </label>`).join('') || '<div style="color:var(--dim-2);font-size:12px;">暂无其他成员</div>'}
+    </div>`}
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="org-btn" onclick="closeBoardProtocol()">取消</button>
+      ${off
+        ? '<button class="org-btn" style="color:var(--accent);" onclick="confirmBoardProtocol(&#39;working&#39;)">⚡ 开工并广播</button>'
+        : '<button class="org-btn" style="color:var(--red);" onclick="confirmBoardProtocol(&#39;off&#39;)">🌙 收工并广播</button>'}
+    </div>
+  `;
+  document.getElementById('proto-overlay').classList.add('show');
+  document.getElementById('proto-modal').classList.add('show');
+}
+function closeBoardProtocol() {
+  const ov = document.getElementById('proto-overlay');
+  const md = document.getElementById('proto-modal');
+  if (ov) ov.classList.remove('show');
+  if (md) md.classList.remove('show');
+}
+async function confirmBoardProtocol(mode) {
+  const exempts = mode === 'off'
+    ? [...document.querySelectorAll('.proto-exempt:checked')].map(i => i.value)
+    : [];
+  const resp = await fetch('/api/protocol', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, by: 'user', exemptions: exempts })
+  });
+  const j = await resp.json();
+  closeBoardProtocol();
+  if (!j.ok) { alert(j.message || '切换失败'); return; }
+  await loadBoard();
+}
 function openOrgView() {
   const sp = new URLSearchParams(location.search);
   const proj = sp.get('project');

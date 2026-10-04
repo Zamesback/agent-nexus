@@ -660,6 +660,12 @@ def load_board(project=None):
     with file_lock(board_file, exclusive=False):
         with open(board_file, "r", encoding="utf-8") as f:
             data = json.load(f)
+    # v2.14：协作协议（工作/收工）兜底——老项目默认工作态
+    try:
+        if not isinstance(data.get("protocol"), dict):
+            data["protocol"] = {"mode": "working", "updated_by": "system", "updated_at": "", "exemptions": []}
+    except Exception:
+        pass
     # v2.11：project_info 补工作区（旧项目 board 里没有，从 config 补；兼容 str/dict）
     try:
         pi = data.setdefault("project_info", {})
@@ -849,6 +855,12 @@ def build_guide(project, agent_id, name, role):
 
 【协作方式】
 这个项目使用「协同看板」工作：任务、消息、决策都记录在项目目录下的 collab_board.json（或通过 /api/board?project={project} 读取）。你的所有工作都在看板上留痕。
+
+【协作协议 · 工作态/收工态】
+- 看板顶层 protocol.mode 是项目当前协作状态：
+  · working（工作态）：认领任务后，每 30 分钟自动检查任务看板对齐一次——有任务就开工、有交付就标记待验收、有验收就收尾；被 @ 的消息及时响应。
+  · off（收工态）：停止主动轮询和认领新任务，但保留被动响应——被 @ 或收到新指派时仍会回复处理。
+- 如果你在 protocol.exemptions 名单里，即使项目处于收工态，也按工作态执行。
 
 【工作协议】
 1. 开始工作前，先读取看板，了解项目背景、任务清单和你被分配/可认领的任务。
@@ -1113,6 +1125,51 @@ def sync_tasks_from_taskplan(data, sender, content):
             "type": "system"
         })
     return created, skipped
+
+
+
+
+def set_protocol(project, mode, by="user", exemptions=None):
+    """v2.14: 项目级协作协议——工作态(working)/收工态(off)。
+    收工态下 Agent 暂停主动轮询与认领，但保留被动响应；exemptions 中成员在收工态仍按工作态对待。
+    更新后发系统消息广播给全员。"""
+    mode = (mode or "working").strip().lower()
+    if mode not in ("working", "off"):
+        return False, "mode 必须是 working/off"
+    board = load_board(project)
+    proto = board.setdefault("protocol", {})
+    if not isinstance(proto, dict):
+        proto = {}
+    prev = proto.get("mode", "working")
+    exempt = [x for x in (exemptions or []) if isinstance(x, str) and x]
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    proto["mode"] = mode
+    proto["updated_by"] = by
+    proto["updated_at"] = now
+    proto["exemptions"] = exempt
+    board["protocol"] = proto
+    # 豁免成员名单（用于消息）
+    names = []
+    for x in exempt:
+        for a in board.get("agents", []):
+            if a.get("id") == x:
+                names.append(a.get("name") or x)
+                break
+        else:
+            names.append(x)
+    if mode == "working":
+        content = "⚡ 已进入工作状态：任务板已同步，认领任务后每 30 分钟对齐看板（有活认领、有交付交付、有验收验收）。" + (f" 豁免名单已清空。" if not exempt else f" 豁免继续工作态：{'、'.join(names)}。")
+    else:
+        content = "🌙 已收工：全员停止主动轮询与认领，保留被动响应（被 @ 仍会回复）。" + (f" 豁免继续工作态：{'、'.join(names)}。" if exempt else "")
+    board.setdefault("messages", []).append({
+        "id": max([int(m.get("id", 0)) for m in board.get("messages", []) if str(m.get("id", 0)).isdigit()], default=0) + 1,
+        "sender": "system",
+        "content": content,
+        "timestamp": now,
+        "type": "system"
+    })
+    save_board(board, project)
+    return True, content
 
 
 # ===== Agent @消息推送与接通确认（T8.2）=====
@@ -2335,6 +2392,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._handle_claim_task(project)
             return
 
+        # API: 协作协议 开工/收工（v2.14）
+        if parsed.path == "/api/protocol":
+            self._handle_protocol(project)
+            return
+
         # API: 保存项目配置
         if parsed.path == "/api/config":
             self._handle_save_config(project)
@@ -2722,6 +2784,21 @@ class CollabHandler(SimpleHTTPRequestHandler):
         success, message, guide = invite_agent(project, agent_id, name, role, entry_type, entry_target)
         self._send_json({"ok": success, "message": message, "agent_id": agent_id,
                          "name": name, "guide": guide, "entry_type": entry_type})
+
+    def _handle_protocol(self, project=None):
+        """v2.14: 开工/收工切换 + 豁免名单"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            req = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+        mode = req.get("mode", "working")
+        by = (req.get("by") or "user").strip()
+        exemptions = req.get("exemptions")
+        ok, message = set_protocol(project, mode, by, exemptions)
+        self._send_json({"ok": ok, "message": message})
 
     def _handle_org_relation(self, project=None):
         """v2.9: 批量设置组织汇报关系"""

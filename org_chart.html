@@ -222,6 +222,12 @@
     border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; line-height: 1.6;
   }
   .node-now .now-title { overflow: hidden; text-overflow: ellipsis; }
+  .exempt-tag {
+    position: absolute; top: 8px; right: 8px;
+    font-size: 9px; font-family: var(--mono); color: #d9a441;
+    border: 1px solid rgba(217,164,65,.35); background: rgba(217,164,65,.08);
+    border-radius: 4px; padding: 1px 6px; line-height: 1.6; letter-spacing: .5px;
+  }
   .node-status {
     margin-top: 6px; padding-top: 6px;
     border-top: 1px solid var(--line);
@@ -412,6 +418,7 @@
       <span class="subtitle" id="projMeta"></span>
     </div>
     <div class="topbar-right">
+      <button class="btn ghost" id="btn-protocol" onclick="openProtocol()" title="协作协议：开工/收工 + 豁免">⚡ 工作</button>
       <button class="btn" id="btn-board" title="切到任务看板">看板</button>
       <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
@@ -489,6 +496,17 @@
     </div>
   </div>
 
+  <!-- 协作协议：开工/收工 + 豁免（v2.14） -->
+  <div class="modal-mask" id="protoModal" onclick="if(event.target===this)closeProto()">
+    <div class="modal" style="width:540px;">
+      <div class="modal-head">
+        <div style="font-size:15px;font-weight:600;">协作协议 · 开工/收工</div>
+        <button class="modal-close" onclick="closeProto()">✕</button>
+      </div>
+      <div class="proto-body" id="protoBody"></div>
+    </div>
+  </div>
+
   <!-- 看板浮层 -->
   <div class="board-mask" id="boardModal">
     <button class="board-close" id="boardClose" title="返回组织视图">← 返回组织</button>
@@ -563,6 +581,7 @@ async function loadBoard() {
   renderLegend();
   render();
   renderSide();
+  updateProtocolBtn();
 }
 
 /* ===== 布局：树形分层 ===== */
@@ -693,6 +712,7 @@ function render() {
           <span style="color:var(--dim-2);">${tasksOf(a.id).length ? tasksOf(a.id).length + ' 任务' : '·'}</span>
         </div>
         ${topTask ? `<div class="node-now"><span class="now-tag">在途</span><span class="now-title">${esc(topTask.title)}</span></div>` : ''}
+        ${(board && board.protocol && board.protocol.mode === 'off' && (board.protocol.exemptions || []).indexOf(a.id) >= 0) ? '<span class="exempt-tag">豁免</span>' : ''}
       </div>`;
     });
   });
@@ -758,6 +778,75 @@ function toggleLayout() {
 }
 
 /* ===== 重置布局（v2.12） ===== */
+
+/* ===== 协作协议：开工/收工 + 豁免（v2.14） ===== */
+function protoMode() {
+  return (board && board.protocol && board.protocol.mode) || 'working';
+}
+function protoExempts() {
+  return (board && board.protocol && board.protocol.exemptions) || [];
+}
+function updateProtocolBtn() {
+  const btn = document.getElementById('btn-protocol');
+  if (!btn) return;
+  const off = protoMode() === 'off';
+  btn.textContent = off ? '🌙 收工' : '⚡ 工作';
+  btn.title = off ? '当前收工态（豁免成员继续工作）— 点击开工' : '当前工作态 — 点击收工';
+  btn.style.opacity = off ? '0.75' : '1';
+}
+function openProtocol() {
+  const body = document.getElementById('protoBody');
+  const off = protoMode() === 'off';
+  const agents = (board.agents || []).filter(a => a.id !== 'user');
+  const exempts = protoExempts();
+  const now = (board.protocol && board.protocol.updated_at) || '';
+  const by = (board.protocol && board.protocol.updated_by) || '';
+  body.innerHTML = `
+    <div class="proto-state" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1px solid var(--line);border-radius:10px;margin-bottom:12px;background:var(--panel-2);">
+      <span style="font-size:20px;">${off ? '🌙' : '⚡'}</span>
+      <div style="flex:1;">
+        <div style="font-weight:600;font-size:14px;">${off ? '收工态' : '工作态'}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px;">${now ? '最近切换：' + now + (by ? '（' + by + '）' : '') : '尚未切换过'}</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--dim);line-height:1.7;padding:0 2px 10px;">
+      ${off
+        ? '全员已收工：Agent 停止主动轮询与认领，保留被动响应。点「开工」恢复工作态（豁免名单自动清空）。'
+        : '工作态约定：认领任务后每 30 分钟自动对齐看板（有活认领、有交付交付、有验收验收）。点「收工」让全员停止主动动作。'}
+    </div>
+    ${off ? '' : `
+    <div style="font-size:12px;color:var(--dim);margin-bottom:8px;">收工后豁免以下成员，他们仍按工作态执行：</div>
+    <div class="proto-exempts" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+      ${agents.map(a => `
+        <label style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;">
+          <input type="checkbox" value="${esc(a.id)}" ${exempts.indexOf(a.id) >= 0 ? 'checked' : ''} style="accent-color:var(--accent);">
+          <span class="badge" style="width:18px;height:18px;font-size:9px;background:${a.color || '#888'};">${esc(badgeText(a.name || a.id))}</span>
+          ${esc(a.name || a.id)}
+        </label>`).join('') || '<div style="color:var(--dim-2);font-size:12px;">暂无其他成员</div>'}
+    </div>`}
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="btn" onclick="closeProto()">取消</button>
+      ${off
+        ? '<button class="btn primary" onclick="confirmProto(&#39;working&#39;)">⚡ 开工并广播</button>'
+        : '<button class="btn" style="border-color:var(--red);color:var(--red);" onclick="confirmProto(&#39;off&#39;)">🌙 收工并广播</button>'}
+    </div>
+  `;
+  document.getElementById('protoModal').classList.add('show');
+}
+function closeProto() { document.getElementById('protoModal').classList.remove('show'); }
+async function confirmProto(mode) {
+  const exempts = mode === 'off'
+    ? [...document.querySelectorAll('.proto-exempts input:checked')].map(i => i.value)
+    : [];
+  const resp = await fetch('/api/protocol' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, by: 'user', exemptions: exempts })
+  });
+  const j = await resp.json();
+  closeProto();
+  if (!j.ok) { alert(j.message || '切换失败'); return; }
+  await loadBoard();
+}
 function resetLayout() {
   if (!PROJECT) return;
   try {

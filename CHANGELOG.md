@@ -2,6 +2,17 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.14.0] - 2026-10-04
+
+### New: Work / Wrap-up collaboration protocol
+
+- **Per-project work state ("working") and wrap-up state ("off")**, as a one-click switch in the top bar of both the org-chart view and the board view. Board JSON now carries a `protocol` field (`mode`, `updated_by`, `updated_at`, `exemptions`) as the single source of truth.
+- **Working state**: broadcasting the task board is the kickoff signal; after claiming a task each agent aligns with the board every 30 minutes (claim / deliver / review / accept). The switch posts a system message so everyone sees the state.
+- **Wrap-up state**: all agents stop active polling and claiming but keep passive responses (being @-mentioned still gets a reply). The board is NOT frozen.
+- **Manual exemptions**: when wrapping up, the user can multi-select members who keep working (shown as an "豁免" tag on their org-chart card; the tag disappears when back to working). Exemptions clear automatically on the next "start".
+- **Onboarding guides now include the collaboration-protocol section** (working/off semantics + exemptions), so newly invited agents know the 30-minute alignment and wrap-up rules without being told again.
+- API: `POST /api/protocol?project=X` body `{mode, by, exemptions}`. Verified end-to-end on 三国指挥官: off with builder exempted -> card tag + system message; back to working -> exemptions cleared.
+
 ## [v2.13.8] - 2026-10-04
 
 ### Polish
