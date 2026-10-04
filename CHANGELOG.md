@@ -2,6 +2,16 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.3] - 2026-10-04
+
+### Fixes
+
+- **Org-chart connector polish** (reported on 三国指挥官): widened the column gap (380→430) so the shared bus and branch stubs read as deliberate segments instead of cramped ticks; child in-ports now land at 0.3×height while parent out-ports stay at mid-height — a parent line no longer enters a child at the same height the child's own line exits, killing the "line passes straight through the node" illusion.
+
+### Notes
+
+- Junction dots follow the new in-port positions. Verified in browser on 三国指挥官 (planner→builder/builder4/builder5 + builder→build2/builder3) and both layout directions remain clean.
+
 ## [v2.13.2] - 2026-10-04
 
 ### Improvements

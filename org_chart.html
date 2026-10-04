@@ -614,7 +614,7 @@ function render() {
   const layer = document.getElementById('nodeLayer');
   const svg = document.getElementById('orgCanvas');
   const W = 320, H = 108, PAD_X = 40, GAP_X = 24, LEVEL_GAP = 150, TOP = 70;
-  const LAYER_GAP_X = 380, COL_GAP_Y = 30;
+  const LAYER_GAP_X = 430, COL_GAP_Y = 30;
   let LAYOUT_DIR = 'lr';
   try { LAYOUT_DIR = localStorage.getItem('agentnexus_layout_' + PROJECT) || 'lr'; } catch (e) {}
   const lr = LAYOUT_DIR === 'lr';
@@ -783,7 +783,8 @@ function renderLines(order) {
   // 端口：out = 父侧出线端（下/右），in = 子侧入线端（上/左）
   const port = (id, dir) => {
     const p = nodePos[id]; if (!p) return null;
-    if (lr) return dir === 'out' ? { x: p.x + p.w, y: p.y + p.h / 2 } : { x: p.x, y: p.y + p.h / 2 };
+    // 出线取中点、入线取 0.3h：进出错开，避免父子同高时"线穿堂"的视觉直通
+    if (lr) return dir === 'out' ? { x: p.x + p.w, y: p.y + p.h / 2 } : { x: p.x, y: p.y + p.h * 0.3 };
     return dir === 'out' ? { x: p.x + p.w / 2, y: p.y + p.h } : { x: p.x + p.w / 2, y: p.y };
   };
   // 横平竖直的正交线（v2.13.2 纯直角，圆角统一由交汇圆点替代）
@@ -814,14 +815,16 @@ function renderLines(order) {
       const busX = Math.max(o.x + 20, Math.min(...kids.map(k => nodePos[k].x)) - 40);
       bus = { x: busX, y: o.y };
       for (const k of kids) {
-        const iy = nodePos[k].y + nodePos[k].h / 2;
+        const ipt = port(k, 'in');
+        const iy = ipt ? ipt.y : nodePos[k].y + nodePos[k].h / 2;
         lines.push({ d: `M${o.x},${o.y} L${busX},${o.y} L${busX},${iy} L${nodePos[k].x},${iy}`, color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6, hub: { x: busX, y: iy } });
       }
     } else {
       const busY = Math.max(o.y + 20, Math.min(...kids.map(k => nodePos[k].y)) - 40);
       bus = { x: o.x, y: busY };
       for (const k of kids) {
-        const ix = nodePos[k].x + nodePos[k].w / 2;
+        const ipt = port(k, 'in');
+        const ix = ipt ? ipt.x : nodePos[k].x + nodePos[k].w / 2;
         lines.push({ d: `M${o.x},${o.y} L${o.x},${busY} L${ix},${busY} L${ix},${nodePos[k].y}`, color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6, hub: { x: ix, y: busY } });
       }
     }
