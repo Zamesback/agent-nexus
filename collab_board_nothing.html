@@ -206,6 +206,8 @@
   .col-todo .col-header { color: var(--dim); }
   .col-progress { --col-accent: var(--red); }
   .col-progress .col-header { color: var(--red); }
+  .col-review { --col-accent: #d9a441; }
+  .col-review .col-header { color: #d9a441; }
   .col-done { --col-accent: var(--dim); }
   .col-done .col-header { color: var(--dim); }
   .col-blocked { --col-accent: var(--red); }
@@ -1791,6 +1793,7 @@ function colorForAgent(id) {
 const STATUS_CONFIG = {
   todo: { label: '待办', colClass: 'col-todo', progressClass: 'progress-todo' },
   in_progress: { label: '进行中', colClass: 'col-progress', progressClass: 'progress-progress' },
+  review: { label: '待验收', colClass: 'col-review', progressClass: 'progress-review' },
   done: { label: '已完成', colClass: 'col-done', progressClass: 'progress-done' },
   blocked: { label: '阻塞', colClass: 'col-blocked', progressClass: 'progress-blocked' }
 };
@@ -1886,7 +1889,7 @@ function renderStats() {
 // ===== 渲染：看板 =====
 function renderBoard() {
   const container = document.getElementById('board-columns');
-  const statuses = ['todo', 'in_progress', 'done', 'blocked'];
+  const statuses = ['todo', 'in_progress', 'review', 'done', 'blocked'];
 
   container.innerHTML = statuses.map(status => {
     const cfg = STATUS_CONFIG[status];

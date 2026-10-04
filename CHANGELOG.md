@@ -2,6 +2,17 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.6] - 2026-10-04
+
+### Fixes
+
+- **Board was silently dropping `review` tasks** (reported on 三国指挥官: open tasks visible in the org view never appeared on the board). The board only recognized todo/in_progress/done/blocked, so review-state tasks were filtered out entirely. Board now has a 待验收 (review) column with its own amber accent.
+- **Org view status names aligned with the data standard** (`in_progress` instead of `doing`): status dots and labels now render correctly for in-progress tasks.
+
+### Notes
+
+- Verified on 三国指挥官: board shows 待办 0 / 进行中 2 / 待验收 3 / 已完成 28 / 阻塞 0; org-view open-task lists render in_progress dots correctly.
+
 ## [v2.13.5] - 2026-10-04
 
 ### Fixes

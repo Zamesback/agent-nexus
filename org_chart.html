@@ -512,8 +512,8 @@ let nodePos = {};      // agent_id -> {x, y, level}
 let agentById = {};
 let editMode = false;
 
-const STATUS_ORDER = ['blocked', 'doing', 'review', 'todo', 'done'];
-const STATUS_LABEL = { todo: '待做', doing: '进行中', blocked: '卡壳', review: '待验收', done: '完成' };
+const STATUS_ORDER = ['blocked', 'in_progress', 'review', 'todo', 'done'];
+const STATUS_LABEL = { todo: '待做', in_progress: '进行中', blocked: '卡壳', review: '待验收', done: '完成' };
 const AGENT_COLORS = ['#e5484d', '#f5a524', '#30a46c', '#4c8dff', '#9c7bd8', '#f76808', '#12b5c9', '#d95d9e'];
 function colorForAgent(id) {
   let h = 0;
@@ -914,7 +914,7 @@ function renderSide() {
       <div class="panel-title">未闭合事项</div>
       ${pending.length ? pending.slice(0, 6).map(t => `
         <div class="pending-item">
-          <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'doing' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
+          <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'in_progress' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
           <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.title)}</span>
           <span class="who">${esc(whoName(t.assignee))}</span>
         </div>`).join('') : '<div class="pending-empty">全部闭合，没有在途事项</div>'}
@@ -985,7 +985,7 @@ function openPerson(agentId) {
       <div class="modal-sec-title">当前工作 · ${working.length}</div>
       ${working.length ? working.map(t => `
         <div class="work-item">
-          <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'doing' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
+          <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'in_progress' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
           <span class="t-title">${esc(t.title)}</span>
           <span class="t-id">${esc(t.id)}</span>
         </div>`).join('') : '<div class="work-empty">手上没活 —— 该派活了</div>'}
