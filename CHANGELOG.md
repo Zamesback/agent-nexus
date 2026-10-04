@@ -2,6 +2,22 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.12.0] - 2026-10-04
+
+### New Features
+
+- **Back-to-dashboard entry**: the org view top bar now has a "← 项目总表" button (and the board page has one too, hidden when embedded as an org-view overlay) so you can always jump back to the project dashboard from inside a project.
+- **Drag & drop org chart**: every member card can be dragged to rearrange the org view freely — the position is remembered per project (localStorage) and survives refresh; a "重置布局" button restores the automatic layered layout anytime.
+- **Prettier connector lines**: smoother S-curve bezier control points, layered stroke width and opacity (report 1.6px solid / dependency 1.2px dashed), refined arrow markers — closer to the reference org-card style.
+- **Rename & remove members**: the person card now has "✎ 改名" and "移除成员" actions
+  - rename updates name/role in board + config, never touches the agent's entry/connected state
+  - remove is guarded (the project owner `user` cannot be removed), orphans its open tasks back to unassigned with a note, clears any reports_to references (subordinates become top-level), keeps message history, and posts a system message
+
+### Notes
+
+- New APIs: POST `/api/agents/update` (rename / change role), POST `/api/agents/remove` (remove member).
+- Verified end-to-end: rename syncs board+config; remove cleans agents/config/tasks/relations; drag persists position across refresh and reset restores layout; board page shows the back button only outside embed mode.
+
 ## [v2.11.0] - 2026-10-04
 
 ### New Features

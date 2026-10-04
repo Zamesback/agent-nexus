@@ -188,11 +188,12 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
     padding: 14px;
-    cursor: pointer;
+    cursor: grab;
     transition: border-color .15s, box-shadow .15s, transform .15s;
     box-shadow: 0 2px 12px rgba(0,0,0,.25);
     user-select: none;
   }
+  .node.dragging { cursor: grabbing; box-shadow: 0 14px 36px rgba(0,0,0,.35); z-index: 50; }
   .node:hover { border-color: var(--dim-2); transform: translateY(-2px); }
   .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .25); }
   .node.user-node { border-style: dashed; }
@@ -301,6 +302,13 @@
     border-radius: var(--radius-lg);
     box-shadow: 0 20px 60px rgba(0,0,0,.5);
   }
+  .modal-ops { display: flex; gap: 8px; margin: 4px 0 2px; flex-wrap: wrap; }
+  .btn.mini { padding: 4px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
+  .btn.mini:hover { border-color: var(--accent); }
+  .btn.mini.danger { color: var(--accent); border-color: var(--accent); }
+  .btn.mini.danger:hover { background: var(--accent); color: #fff; }
+  .rename-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .rename-row input { flex: 1; background: var(--bg-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
   .modal-head {
     display: flex; align-items: center; gap: 12px;
     padding: 18px 20px; border-bottom: 1px solid var(--line);
@@ -370,6 +378,7 @@
 <body>
   <div class="topbar">
     <div class="topbar-left">
+      <button class="btn ghost" id="btn-home" title="回到项目总表" onclick="location.href='/index.html'">← 项目总表</button>
       <span class="logo-mark">◆ AGENTNEXUS</span>
       <span class="proj-name" id="projName">—</span>
       <span class="subtitle" id="projMeta"></span>
@@ -378,6 +387,7 @@
       <button class="btn" id="btn-board" title="切到任务看板">看板</button>
       <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
+      <button class="btn ghost" id="btn-reset" onclick="resetLayout()" title="恢复自动布局">重置布局</button>
       <button class="btn ghost" id="theme-toggle" onclick="toggleTheme()">A // 亮色</button>
     </div>
   </div>
@@ -574,19 +584,26 @@ function render() {
   // 节点定位
   let html = '';
   const order = [];
+  window.orderCache = order;
   levels.forEach((list, li) => {
     const y = TOP + li * LEVEL_GAP;
     const rowW = PAD_X * 2 + list.length * W + (list.length - 1) * GAP_X;
     const startX = (totalW - rowW) / 2;
     list.forEach((a, i) => {
-      const x = startX + i * (W + GAP_X);
-      nodePos[a.id] = { x, y, w: W, h: H, level: li };
+      let x = startX + i * (W + GAP_X);
+      let yNode = y;
+      // v2.12：恢复手动拖拽位置（按 项目+agent 存 localStorage）
+      try {
+        const saved = JSON.parse(localStorage.getItem('agentnexus_pos_' + PROJECT + '_' + a.id));
+        if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') { x = saved.x; yNode = saved.y; }
+      } catch (e) {}
+      nodePos[a.id] = { x, y: yNode, w: W, h: H, level: li };
       order.push(a);
       const st = agentStatus(a.id);
       const color = a.color || colorForAgent(a.id);
       const isUser = a.id === 'user';
       html += `<div class="node ${isUser ? 'user-node' : ''} ${editMode ? '' : ''}" id="node-${esc(a.id)}"
-        data-id="${esc(a.id)}" onclick="openPerson('${esc(a.id)}')" style="left:${x}px;top:${y}px;">
+        data-id="${esc(a.id)}" onclick="openPerson('${esc(a.id)}')" style="left:${x}px;top:${yNode}px;">
         <div class="node-head">
           <div class="badge" style="background:${color};">${esc(badgeText(a.name || a.id))}</div>
           <div>
@@ -603,7 +620,64 @@ function render() {
   });
   layer.innerHTML = html;
   document.getElementById('emptyState').style.display = order.length ? 'none' : 'block';
+  enableNodeDrag();
   renderLines(order);
+}
+
+/* ===== 节点拖拽（v2.12） ===== */
+function enableNodeDrag() {
+  document.querySelectorAll('.node').forEach(el => {
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      dragging = true; moved = false;
+      sx = e.clientX; sy = e.clientY;
+      const cs = getComputedStyle(el);
+      ox = parseFloat(cs.left) || 0; oy = parseFloat(cs.top) || 0;
+      try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+      if (!moved) return;
+      el.classList.add('dragging');
+      el.style.left = (ox + dx) + 'px';
+      el.style.top = (oy + dy) + 'px';
+      const id = el.dataset.id;
+      const p = nodePos[id];
+      if (p) { p.x = ox + dx; p.y = oy + dy; }
+      if (window.orderCache) renderLines(window.orderCache);
+    });
+    const end = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      if (moved) {
+        const id = el.dataset.id;
+        const p = nodePos[id];
+        if (p) {
+          try { localStorage.setItem('agentnexus_pos_' + PROJECT + '_' + id, JSON.stringify({ x: p.x, y: p.y })); } catch (err) {}
+          el._suppressClick = true;
+        }
+      }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('click', (e) => {
+      if (el._suppressClick) { e.stopPropagation(); el._suppressClick = false; }
+    }, true);
+  });
+}
+
+/* ===== 重置布局（v2.12） ===== */
+function resetLayout() {
+  if (!PROJECT) return;
+  try {
+    const prefix = 'agentnexus_pos_' + PROJECT + '_';
+    Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => localStorage.removeItem(k));
+  } catch (e) {}
+  loadBoard();
 }
 
 /* ===== 连线 ===== */
@@ -648,7 +722,7 @@ function renderLines(order) {
   for (const a of (board.agents || [])) {
     const rid = (a.reports_to || '').trim();
     if (rid && nodePos[a.id] && nodePos[rid]) {
-      lines.push({ d: curve(cx(rid), botY(rid), cx(a.id), topY(a.id)), color: dim2, dash: '', marker: 'arr-report', cls: 'report' });
+      lines.push({ d: curve(cx(rid), botY(rid), cx(a.id), topY(a.id)), color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6 });
     }
   }
   // 2) 协作线（虚线）：同一未完成任务的不同 assignee
@@ -667,7 +741,7 @@ function renderLines(order) {
           seen.add(key);
           lines.push({
             d: curve(cx(dep.assignee), botY(dep.assignee), cx(t.assignee), topY(t.assignee)),
-            color: amber, dash: '3 4', marker: 'arr-dep', cls: 'dep'
+            color: amber, dash: '3 4', marker: 'arr-dep', cls: 'dep', width: 1.2
           });
         }
       }
@@ -679,10 +753,10 @@ function renderLines(order) {
     g.setAttribute('d', l.d);
     g.setAttribute('fill', 'none');
     g.setAttribute('stroke', l.color);
-    g.setAttribute('stroke-width', '1.4');
+    g.setAttribute('stroke-width', l.width || (l.cls === 'report' ? 1.6 : 1.2));
     if (l.dash) g.setAttribute('stroke-dasharray', l.dash);
     g.setAttribute('marker-end', `url(#${l.marker})`);
-    g.setAttribute('opacity', '0.75');
+    g.setAttribute('opacity', l.cls === 'report' ? 0.8 : 0.55);
     svg.appendChild(g);
   }
 }
@@ -773,6 +847,12 @@ function openPerson(agentId) {
       </div>
       <button class="modal-close" onclick="closePerson()">✕</button>
     </div>
+    ${agentId === 'user' ? '' : `
+    <div class="modal-ops">
+      <button class="btn mini" onclick="renameAgent('${esc(a.id)}')">✎ 改名</button>
+      <button class="btn mini danger" onclick="removeAgent('${esc(a.id)}')">移除成员</button>
+      <span style="font-size:11px;color:var(--dim-2);margin-left:auto;font-family:var(--mono);">拖动节点可自由排布</span>
+    </div>`}
     <div class="modal-sec">
       <div class="modal-sec-title">当前工作 · ${working.length}</div>
       ${working.length ? working.map(t => `
@@ -809,6 +889,37 @@ function openPerson(agentId) {
   document.getElementById('personModal').classList.add('show');
 }
 function closePerson() { document.getElementById('personModal').classList.remove('show'); }
+
+async function renameAgent(agentId) {
+  const a = agentById[agentId];
+  if (!a) return;
+  const name = prompt('给成员改个名字（id 不变，接入不受影响）：', a.name || agentId);
+  if (name === null || !name.trim()) return;
+  const resp = await fetch('/api/agents/update' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, name: name.trim() })
+  });
+  const r = await resp.json();
+  if (r.ok) { await loadBoard(); closePerson(); }
+  else alert(r.error || '改名失败');
+}
+
+async function removeAgent(agentId) {
+  const a = agentById[agentId];
+  if (!a) return;
+  const open = tasksOf(agentId).filter(t => t.status !== 'done').length;
+  const msg = `确定移除「${a.name || agentId}」？`
+    + (open ? `\n它名下有 ${open} 个未完成任务，将转为无人认领。` : '')
+    + '\n移除后其下属成员会提升为顶层，历史消息保留。';
+  if (!confirm(msg)) return;
+  const resp = await fetch('/api/agents/remove' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId })
+  });
+  const r = await resp.json();
+  if (r.ok) { await loadBoard(); closePerson(); }
+  else alert(r.error || '移除失败');
+}
 
 async function saveRelation(agentId) {
   const v = document.getElementById('relSelect').value;

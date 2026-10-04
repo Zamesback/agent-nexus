@@ -1520,6 +1520,7 @@
     <div class="subtitle" id="project-subtitle">LOADING...</div>
   </div>
   <div class="topbar-right">
+    <button class="org-btn" id="home-toggle" onclick="location.href='/index.html'" title="回到项目总表">← 项目总表</button>
     <button class="org-btn" id="org-toggle" onclick="openOrgView()" title="组织架构视图">组织视图</button>
     <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色 / Premium">N // 暗色</button>
     <button class="api-settings-btn" onclick="openApiSettings()">API 设置</button>
@@ -1739,6 +1740,8 @@ const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.get('embed') === '1') {
   const _orgBtn = document.getElementById('org-toggle');
   if (_orgBtn) _orgBtn.style.display = 'none';
+  const _homeBtn = document.getElementById('home-toggle');
+  if (_homeBtn) _homeBtn.style.display = 'none';
 }
 const currentProject = urlParams.get('project');
 

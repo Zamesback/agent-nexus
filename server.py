@@ -837,6 +837,80 @@ def register_agent(project, agent_id, entry, name=None, role=None):
     return True, f"Agent {agent_id} 注册成功"
 
 
+def update_agent_profile(project, agent_id, name=None, role=None):
+    """v2.12: 成员改名 / 改身份——只更新 name/role，不动 entry/connected 接入状态"""
+    board = load_board(project)
+    found = False
+    for a in board.get("agents", []):
+        if a.get("id") == agent_id:
+            if name:
+                a["name"] = name
+            if role is not None:
+                a["role"] = role
+            found = True
+            break
+    if not found:
+        return False, "成员不存在"
+    save_board(board, project)
+    # 同步 config
+    try:
+        cfg = load_config(project)
+        for a in cfg.get("agents", []):
+            if isinstance(a, dict) and a.get("id") == agent_id:
+                if name:
+                    a["name"] = name
+                if role is not None:
+                    a["role"] = role
+                break
+        save_config(cfg, project)
+    except Exception:
+        pass
+    return True, "已更新"
+
+
+def remove_agent(project, agent_id):
+    """v2.12: 移除成员——从看板/config 删除；名下未完成任务转为无人认领；引用它的汇报关系清空"""
+    if not agent_id or agent_id == "user":
+        return False, "项目主导方不能被移除"
+    board = load_board(project)
+    if not any(a.get("id") == agent_id for a in board.get("agents", [])):
+        return False, "成员不存在"
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    # 名下未完成任务：清空 assignee + 备注
+    orphan = 0
+    for t in board.get("tasks", []):
+        if t.get("assignee") == agent_id:
+            t["assignee"] = ""
+            t["note"] = (t.get("note") or "") + f" [原负责人 {agent_id} 已移除]"
+            if t.get("status") not in ("done", "blocked"):
+                orphan += 1
+    # 引用它的汇报关系清空（其下属提升为顶层）
+    for a in board.get("agents", []):
+        if a.get("reports_to") == agent_id:
+            a["reports_to"] = ""
+    # 从成员列表移除
+    board["agents"] = [a for a in board.get("agents", []) if a.get("id") != agent_id]
+    # 系统消息
+    board.setdefault("messages", []).append({
+        "id": max([m.get("id", 0) for m in board.get("messages", [])], default=0) + 1,
+        "sender": "system",
+        "content": f"成员 {agent_id} 已从班子移除" + (f"，{orphan} 个未完成任务已转为无人认领" if orphan else ""),
+        "timestamp": now,
+        "type": "system"
+    })
+    save_board(board, project)
+    # config 同步删除
+    try:
+        cfg = load_config(project)
+        cfg_agents = cfg.get("agents", [])
+        if isinstance(cfg_agents, list):
+            cfg["agents"] = [a for a in cfg_agents if not (isinstance(a, dict) and a.get("id") == agent_id) and a != agent_id]
+        save_config(cfg, project)
+    except Exception:
+        pass
+    return True, f"已移除成员 {agent_id}" + (f"，{orphan} 个任务转为无人认领" if orphan else "")
+
+
 # ===== Agent @消息推送与接通确认（T8.2）=====
 def push_message_to_agent(agent, msg, project=None):
     """T8.2: 推送@消息给已注册HTTP webhook的Agent
@@ -2067,6 +2141,16 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._handle_register_agent(project)
             return
 
+        # API: 成员改名/改身份（v2.12）
+        if parsed.path == "/api/agents/update":
+            self._handle_update_agent_profile(project)
+            return
+
+        # API: 移除成员（v2.12）
+        if parsed.path == "/api/agents/remove":
+            self._handle_remove_agent(project)
+            return
+
         # API: 测试API连接（T2.4）
         if parsed.path == "/api/test-connection":
             self._handle_test_connection(project)
@@ -2369,6 +2453,38 @@ class CollabHandler(SimpleHTTPRequestHandler):
 
         success, message = register_agent(project, agent_id, entry, name=name, role=role)
         self._send_json({"ok": success, "message": message, "agent_id": agent_id, "name": name or agent_id})
+
+
+    def _handle_update_agent_profile(self, project=None):
+        """v2.12: 改名 / 改身份"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            req = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+        agent_id = (req.get("agent_id") or "").strip()
+        name = (req.get("name") or "").strip()
+        role = req.get("role")
+        if not agent_id:
+            self._send_json({"ok": False, "error": "agent_id 不能为空"})
+            return
+        success, message = update_agent_profile(project, agent_id, name=name or None, role=role)
+        self._send_json({"ok": success, "message": message, "agent_id": agent_id})
+
+    def _handle_remove_agent(self, project=None):
+        """v2.12: 移除成员"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            req = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+        agent_id = (req.get("agent_id") or "").strip()
+        success, message = remove_agent(project, agent_id)
+        self._send_json({"ok": success, "message": message, "agent_id": agent_id})
 
     def _handle_org_relation(self, project=None):
         """v2.9: 批量设置组织汇报关系"""
