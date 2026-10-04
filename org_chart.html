@@ -210,6 +210,18 @@
   }
   .node-name { font-size: 14px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .node-role { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.35; white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; max-width: 100%; }
+  .node-now {
+    margin-top: 6px; padding-top: 6px;
+    border-top: 1px dashed var(--line-2);
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--dim);
+    white-space: nowrap; overflow: hidden;
+  }
+  .node-now .now-tag {
+    flex-shrink: 0; font-family: var(--mono); font-size: 9px; color: var(--dim-2);
+    border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; line-height: 1.6;
+  }
+  .node-now .now-title { overflow: hidden; text-overflow: ellipsis; }
   .node-status {
     margin-top: 6px; padding-top: 6px;
     border-top: 1px solid var(--line);
@@ -664,6 +676,8 @@ function render() {
       order.push(a);
       const st = agentStatus(a.id);
       const color = a.color || colorForAgent(a.id);
+      const _openTs = tasksOf(a.id).filter(t => t.status !== 'done');
+      const topTask = _openTs.length ? _openTs.reduce((b, t) => STATUS_ORDER.indexOf(t.status || 'todo') < STATUS_ORDER.indexOf(b.status || 'todo') ? t : b) : null;
       const isUser = a.id === 'user';
       html += `<div class="node ${isUser ? 'user-node' : ''} ${editMode ? '' : ''}" id="node-${esc(a.id)}"
         data-id="${esc(a.id)}" onclick="openPerson('${esc(a.id)}')" style="left:${x}px;top:${yNode}px;">
@@ -678,6 +692,7 @@ function render() {
           <span><span class="status-dot" style="background:${st.color};"></span>${st.label}</span>
           <span style="color:var(--dim-2);">${tasksOf(a.id).length ? tasksOf(a.id).length + ' 任务' : '·'}</span>
         </div>
+        ${topTask ? `<div class="node-now"><span class="now-tag">在途</span><span class="now-title">${esc(topTask.title)}</span></div>` : ''}
       </div>`;
     });
   });

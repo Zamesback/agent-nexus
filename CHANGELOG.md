@@ -2,6 +2,12 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.8] - 2026-10-04
+
+### Polish
+
+- **Org-chart cards: the lower half now shows what each member is actually working on.** Previously the status strip left the lower part of the card mostly empty. Cards now render an "在途" row with the single most urgent open task title (urgency order: blocked > in_progress > review > todo), ellipsized to one line; members with no open tasks simply omit the row. Verified on 三国指挥官: planner/builder/builder5/build2/builder3/builder6 each show their top task; user/试玩反馈 show none.
+
 ## [v2.13.7] - 2026-10-04
 
 ### Features
