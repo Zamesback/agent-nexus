@@ -2,6 +2,20 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.7] - 2026-10-04
+
+### Features
+
+- **TaskPlan broadcast auto-syncs the board**: when an agent posts a message containing the standard todo-table (`| # | 任务 | 负责 | 优先级 | 说明 |`), the server now parses every row and creates missing tasks directly into the board's 待办 (todo) column — with role→member assignment (美工→美术, 音频→音频, 玩法→玩法, 数值→数值, UI→UI, 引擎/逻辑→planner, 试玩→试玩) and P1/P2/P3→high/medium/low priority mapping. Tasks already on the board are left untouched (no status overwrite). A system message reports how many were synced/skipped.
+
+### Fixes
+
+- Safe next-message-id computation (messages with non-numeric ids no longer crash the sync).
+
+### Notes
+
+- Verified end-to-end on 三国指挥官: replayed the latest broadcast and created 10 todo tasks (T41-F/T54/T56/T57/T59/T60/T62/T63/T-遗留/UI线), skipped 4 existing; board now shows 待办 10 / 进行中 3 / 待验收 3 / 已完成 28 / 阻塞 0.
+
 ## [v2.13.6] - 2026-10-04
 
 ### Fixes

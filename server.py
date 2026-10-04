@@ -1029,6 +1029,92 @@ def remove_agent(project, agent_id):
     return True, f"已移除成员 {agent_id}" + (f"，{orphan} 个任务转为无人认领" if orphan else "")
 
 
+
+def _looks_like_taskplan_table(line):
+    """v2.13.7: 识别『| # | 任务 | 负责 | 优先级 | 说明 |』待办清单表格头"""
+    ln = line.lstrip()
+    return ln.startswith("|") and "任务" in ln and "负责" in ln and "优先级" in ln and "说明" in ln
+
+
+_ROLE_HINTS = {
+    "美工": ["美术", "贴图", "视觉"],
+    "UI": ["UI", "交互", "界面"],
+    "音频": ["音频", "音效", "音乐", "配音"],
+    "玩法": ["玩法", "关卡"],
+    "数值": ["数值", "平衡", "数据策划"],
+    "试玩": ["试玩", "反馈"],
+    "引擎": ["引擎", "逻辑", "实现", "规划"],
+}
+
+
+def _map_assignee_from_role(board, role_text):
+    """中文角色 → agent_id（按 agent 名字关键词匹配；无命中返回空=无人认领）"""
+    if not role_text:
+        return ""
+    for role_kw, hints in _ROLE_HINTS.items():
+        if role_kw in role_text:
+            for a in board.get("agents", []):
+                name = a.get("name") or ""
+                if any(h in name for h in hints):
+                    return a.get("id")
+    return ""
+
+
+def sync_tasks_from_taskplan(data, sender, content):
+    """v2.13.7: 检测 Agent 广播中的 TaskPlan 待办清单表格，把缺失任务自动写入看板 todo 列。
+    就地修改 data；返回 (created, skipped)。"""
+    if not content or sender == "user":
+        return 0, 0
+    lines = content.split("\n")
+    table_idx = None
+    for i, ln in enumerate(lines):
+        if _looks_like_taskplan_table(ln):
+            table_idx = i
+            break
+    if table_idx is None:
+        return 0, 0
+    existing = {str(t.get("id")): t for t in data.get("tasks", [])}
+    created = skipped = 0
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    for ln in lines[table_idx + 1:]:
+        stripped = ln.strip()
+        if not stripped.startswith("|"):
+            break
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+        tid, title = cells[0], cells[1]
+        if not tid or not any(ch.isalnum() for ch in tid):
+            continue
+        if str(tid) in existing:
+            skipped += 1
+            continue
+        role_text = cells[2] if len(cells) > 2 else ""
+        pri_text = cells[3] if len(cells) > 3 else ""
+        data.setdefault("tasks", []).append({
+            "id": tid,
+            "title": title,
+            "assignee": _map_assignee_from_role(data, role_text),
+            "status": "todo",
+            "progress": 0,
+            "priority": {"P1": "high", "P2": "medium", "P3": "low"}.get(pri_text, "medium"),
+            "note": f"自动同步自 TaskPlan 待办清单（{now[:10]}）",
+            "updated": now,
+        })
+        existing[str(tid)] = True
+        created += 1
+    if created:
+        data.setdefault("messages", []).append({
+            "id": max([int(m.get("id", 0)) for m in data.get("messages", []) if str(m.get("id", 0)).isdigit()], default=0) + 1,
+            "sender": "system",
+            "content": f"已从 TaskPlan 待办清单自动同步 {created} 个新待办任务"
+                       + (f"，{skipped} 个已存在未改动" if skipped else ""),
+            "timestamp": now,
+            "type": "system"
+        })
+    return created, skipped
+
+
 # ===== Agent @消息推送与接通确认（T8.2）=====
 def push_message_to_agent(agent, msg, project=None):
     """T8.2: 推送@消息给已注册HTTP webhook的Agent
@@ -2476,6 +2562,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
                 "type": msg.get("type", "text")
             }
             data["messages"].append(new_msg)
+            # v2.13.7: TaskPlan 待办清单自动同步（就地写任务+系统消息）
+            try:
+                sync_tasks_from_taskplan(data, msg.get("sender"), msg.get("content", ""))
+            except Exception:
+                pass
             save_board(data, project)
 
         # T3.2: 消息写入钩子 — 检测@提及，异步触发对应Agent
