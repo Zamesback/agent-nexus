@@ -2,6 +2,17 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.2] - 2026-10-04
+
+### Improvements
+
+- **Shared-bus connectors with junction dots**: children of the same parent now share one trunk segment from the parent, then branch to each child; every branch point (and the trunk start for 2+ children) gets a small junction dot. Multi-line meetings that used to zigzag left/right now read as one clean bus.
+- **All connectors are now plain right-angle paths** (rounded corners removed) — no more mixed clockwise/counter-clockwise rounding; the junction dots carry the visual anchor instead.
+
+### Notes
+
+- Dependency/collaboration lines keep simple orthogonal right-angle routing (no dots). Verified in browser in both layout directions (left-right & top-down): shared bus, junction dots at correct coordinates, zero rounded segments.
+
 ## [v2.13.1] - 2026-10-04
 
 ### Improvements

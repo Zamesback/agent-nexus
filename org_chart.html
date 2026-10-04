@@ -786,32 +786,46 @@ function renderLines(order) {
     if (lr) return dir === 'out' ? { x: p.x + p.w, y: p.y + p.h / 2 } : { x: p.x, y: p.y + p.h / 2 };
     return dir === 'out' ? { x: p.x + p.w / 2, y: p.y + p.h } : { x: p.x + p.w / 2, y: p.y };
   };
-  // 横平竖直 + 圆角折弯的正交线（v2.13.1）
+  // 横平竖直的正交线（v2.13.2 纯直角，圆角统一由交汇圆点替代）
   const ortho = (x1, y1, x2, y2) => {
-    const R = 14;
     if (lr) {
       if (Math.abs(y1 - y2) < 1) return `M${x1},${y1} L${x2},${y2}`;
       const mx = (x1 + x2) / 2;
-      const r = Math.max(0, Math.min(R, Math.abs(mx - x1) / 2, Math.abs(x2 - mx) / 2));
-      if (r < 2) return `M${x1},${y1} L${x1},${y2} L${x2},${y2}`;
-      const sgn = y2 > y1 ? 1 : -1;
-      return `M${x1},${y1} L${mx - r},${y1} Q${mx},${y1} ${mx},${y1 + sgn * r} L${mx},${y2 - sgn * r} Q${mx},${y2} ${mx + r},${y2} L${x2},${y2}`;
+      return `M${x1},${y1} L${mx},${y1} L${mx},${y2} L${x2},${y2}`;
     }
     if (Math.abs(x1 - x2) < 1) return `M${x1},${y1} L${x2},${y2}`;
     const my = (y1 + y2) / 2;
-    const r = Math.max(0, Math.min(R, Math.abs(my - y1) / 2, Math.abs(y2 - my) / 2));
-    if (r < 2) return `M${x1},${y1} L${x2},${y1} L${x2},${y2}`;
-    const sgn = x2 > x1 ? 1 : -1;
-    return `M${x1},${y1} L${x1},${my - sgn * r} Q${x1},${my} ${x1 + sgn * r},${my} L${x2 - sgn * r},${my} Q${x2},${my} ${x2},${my + sgn * r} L${x2},${y2}`;
+    return `M${x1},${y1} L${x1},${my} L${x2},${my} L${x2},${y2}`;
   };
   const lines = [];
-  // 1) 汇报线（实线）：reports_to -> agent
+  // 1) 汇报线（实线）：reports_to -> agent，同父共享总线 + 分叉交汇点（v2.13.2）
+  const dots = [];
+  const groups = {};
   for (const a of (board.agents || [])) {
     const rid = (a.reports_to || '').trim();
-    if (rid && nodePos[a.id] && nodePos[rid]) {
-      const o1 = port(rid, 'out'), i1 = port(a.id, 'in');
-      if (o1 && i1) lines.push({ d: ortho(o1.x, o1.y, i1.x, i1.y), color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6 });
+    if (rid && nodePos[a.id] && nodePos[rid]) (groups[rid] = groups[rid] || []).push(a.id);
+  }
+  for (const rid of Object.keys(groups)) {
+    const kids = groups[rid].filter(k => nodePos[k]);
+    if (!kids.length || !nodePos[rid]) continue;
+    const o = port(rid, 'out');
+    let bus;
+    if (lr) {
+      const busX = Math.max(o.x + 20, Math.min(...kids.map(k => nodePos[k].x)) - 40);
+      bus = { x: busX, y: o.y };
+      for (const k of kids) {
+        const iy = nodePos[k].y + nodePos[k].h / 2;
+        lines.push({ d: `M${o.x},${o.y} L${busX},${o.y} L${busX},${iy} L${nodePos[k].x},${iy}`, color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6, hub: { x: busX, y: iy } });
+      }
+    } else {
+      const busY = Math.max(o.y + 20, Math.min(...kids.map(k => nodePos[k].y)) - 40);
+      bus = { x: o.x, y: busY };
+      for (const k of kids) {
+        const ix = nodePos[k].x + nodePos[k].w / 2;
+        lines.push({ d: `M${o.x},${o.y} L${o.x},${busY} L${ix},${busY} L${ix},${nodePos[k].y}`, color: dim2, dash: '', marker: 'arr-report', cls: 'report', width: 1.6, hub: { x: ix, y: busY } });
+      }
     }
+    if (kids.length >= 2) dots.push(bus);
   }
   // 2) 协作线（虚线）：同一未完成任务的不同 assignee
   const seen = new Set();
@@ -846,6 +860,18 @@ function renderLines(order) {
     g.setAttribute('marker-end', `url(#${l.marker})`);
     g.setAttribute('opacity', l.cls === 'report' ? 0.8 : 0.55);
     svg.appendChild(g);
+    if (l.hub) {
+      const c = document.createElementNS(ns, 'circle');
+      c.setAttribute('cx', l.hub.x); c.setAttribute('cy', l.hub.y);
+      c.setAttribute('r', 3.2); c.setAttribute('fill', l.color); c.setAttribute('opacity', 0.9);
+      svg.appendChild(c);
+    }
+  }
+  for (const d of dots) {
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', d.x); c.setAttribute('cy', d.y);
+    c.setAttribute('r', 3.2); c.setAttribute('fill', dim2); c.setAttribute('opacity', 0.9);
+    svg.appendChild(c);
   }
 }
 
