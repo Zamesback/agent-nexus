@@ -56,15 +56,18 @@ How multiple agents collaborate through a single JSON file. Human initiates, Pla
 - **Real-time Chat**: Project members (humans + agents) communicate in one shared chat room with @mention support
 - **Agent Collaboration**: Three collaboration modes, enable as needed
 
-### Three Collaboration Modes
+### Four Collaboration Modes
 
 | Mode | How it works | Best for |
 |---|---|---|
 | **Hybrid (default)** | `@mention` detection + one-click copy trigger command, manually drive agents via copy-paste | Pure local, no API key, beginners |
 | **API Mode** | Configure LLM API, `@` messages auto-trigger corresponding agents to reply and execute actions | Have API key, want automation |
 | **Schedule Mode** | Periodically poll unhandled `@` messages, auto-trigger agents | Async collaboration, unattended scenarios |
+| **CLI Mode (v2.10)** | Terminal agents (Claude Code / Codex / OpenHands) run a single `agentnexus` command to join, claim, update, hand off and conclude — all writes land in the same board JSON | Agents that run local commands and must really touch the files |
 
-Start with hybrid mode (copy & paste), upgrade to API mode when ready — no migration needed.
+Start with hybrid mode (copy & paste), upgrade to API or CLI mode when ready — no migration needed.
+
+> **Wake-up rights** (borrowed from an earlier failed design, the good part): prompt agents wake themselves up (they poll / read the board); API agents can be woken by the board but can only talk; **CLI agents can be woken by the board AND can actually execute** — if you need an agent to truly modify your files, connect it via CLI.
 
 ### Multi-Project Management (v2.0)
 - Project manager homepage with all projects visible at a glance
@@ -122,6 +125,33 @@ Visit http://localhost:8766
 - In hybrid mode, click the "Copy Command" button next to messages, then paste into the corresponding agent's chat window
 - After the agent finishes processing, it writes results back to the board (updates task status / sends messages)
 
+### 6. Connect a Terminal Agent (CLI Mode, v2.10)
+
+Terminal-based agents (Claude Code, Codex, OpenHands, ...) join with one command:
+
+```bash
+# inside the agent's terminal, once:
+agentnexus onboard --project MyProject --name "前端开发Agent" --role "前端开发/UI 实现"
+```
+
+All commands:
+
+| Command | What it does |
+|---|---|
+| `agentnexus onboard -p P -n N -r R` | Register your identity into the project board |
+| `agentnexus status -p P` | Project overview: tasks / decisions / messages @you |
+| `agentnexus my-tasks -p P` | List your open tasks |
+| `agentnexus claim -p P -t T` | Claim a task (→ in_progress) |
+| `agentnexus update -p P -t T -s S [--progress N] [--note M]` | Update status / progress / note |
+| `agentnexus handoff -p P -t T --text M` | Write a handoff note on the task + post a board message |
+| `agentnexus send -p P --to A --text M` | Send a message (`@A`) to another agent |
+| `agentnexus accept -p P -t T [--note M]` | Accept / verify a task (→ done) |
+| `agentnexus reject -p P -t T --note M` | Reject a task (→ blocked) |
+| `agentnexus conclude -p P --title T --decision D` | Persist a project-level decision (`decisions[]`) |
+| `agentnexus --install` | Symlink into `/usr/local/bin` for global use |
+
+CLI agents share the same `collab_board.json` with prompt/API agents — claiming, updating, handoff and decisions are all visible in the org view and the task board. To install globally: `python3 tools/agentnexus --install`.
+
 ---
 
 ## Project Structure
@@ -139,6 +169,8 @@ agent-collab-board/
 │   └── sample-project/        # Ready-to-use example data
 ├── docs/
 │   └── screenshots/           # Screenshots
+├── tools/
+│   └── agentnexus             # Terminal-agent CLI (onboard/claim/update/handoff/conclude)
 ├── t5_regression_test.py      # Regression test script
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # MIT License

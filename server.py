@@ -1574,8 +1574,8 @@ def _execute_update_task(task_id, attrs, agent_id):
             data = load_board()
             found = False
             for task in data["tasks"]:
-                if task["id"] == task_id:
-                    for field in ["status", "progress", "assignee", "artifact", "note", "priority"]:
+                if str(task["id"]) == str(task_id):
+                    for field in ["status", "progress", "assignee", "artifact", "note", "priority", "handoff"]:
                         if field in attrs:
                             if field == "progress":
                                 try:
@@ -1602,7 +1602,7 @@ def _execute_claim_task(task_id, agent_id):
             data = load_board()
             found = False
             for task in data["tasks"]:
-                if task["id"] == task_id:
+                if str(task["id"]) == str(task_id):
                     task["assignee"] = agent_id
                     task["status"] = "in_progress"
                     task["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
@@ -1866,6 +1866,12 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._send_json(dashboard_stats())
             return
 
+        # API: 项目级决策列表（v2.10）
+        if parsed.path == "/api/decisions":
+            data = load_board(project)
+            self._send_json({"decisions": data.get("decisions", [])})
+            return
+
         # API: 获取看板数据
         if parsed.path == "/api/board":
             self._send_json(load_board(project))
@@ -1976,6 +1982,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 组织加位子（v2.9，复用注册）
         if parsed.path == "/api/org/position":
             self._handle_org_position(project)
+            return
+
+        # API: 项目级决策沉淀（v2.10 CLI 结论）
+        if parsed.path == "/api/decisions":
+            self._handle_add_decision(project)
             return
 
         # API: 更新任务
@@ -2106,6 +2117,39 @@ class CollabHandler(SimpleHTTPRequestHandler):
         else:
             self._send_json({"ok": False, "error": message})
 
+    def _handle_add_decision(self, project=None):
+        """沉淀一条项目级决策（CLI conclude / 界面均可调用）"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            msg = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+
+        title = (msg.get("title") or "").strip()
+        decision = (msg.get("decision") or "").strip()
+        if not title or not decision:
+            self._send_error(400, "Missing title or decision")
+            return
+
+        with board_lock:
+            data = load_board(project)
+            decisions = data.setdefault("decisions", [])
+            new_id = max([d.get("id", 0) for d in decisions], default=0) + 1
+            decisions.append({
+                "id": new_id,
+                "title": title,
+                "decision": decision,
+                "status": msg.get("status", "agreed"),
+                "by": msg.get("by", "user"),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            })
+            save_board(data, project)
+
+        self._append_system_message(f"决策已沉淀：{title}", project)
+        self._send_json({"ok": True, "decision_id": new_id})
+
     def _handle_update_task(self, task_id, project=None):
         """更新任务状态"""
         try:
@@ -2120,9 +2164,9 @@ class CollabHandler(SimpleHTTPRequestHandler):
             data = load_board(project)
             found = False
             for task in data["tasks"]:
-                if task["id"] == task_id:
+                if str(task["id"]) == str(task_id):
                     # 允许更新的字段
-                    for field in ["status", "progress", "assignee", "artifact", "note", "priority"]:
+                    for field in ["status", "progress", "assignee", "artifact", "note", "priority", "handoff"]:
                         if field in update:
                             task[field] = update[field]
                     task["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
@@ -2197,7 +2241,7 @@ class CollabHandler(SimpleHTTPRequestHandler):
             data = load_board(project)
             found = False
             for task in data["tasks"]:
-                if task["id"] == task_id:
+                if str(task["id"]) == str(task_id):
                     task["assignee"] = assignee
                     task["status"] = "in_progress"
                     task["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")

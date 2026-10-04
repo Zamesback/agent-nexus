@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+agentnexus — AgentNexus 终端接入 CLI（v2.10，供 Claude Code / Codex / OpenHands 等终端 Agent 使用）
+
+用法：
+  agentnexus onboard  --project P --name N --role R     接入：注册自己的身份
+  agentnexus status   --project P                       项目概览（任务/决策/@我）
+  agentnexus my-tasks --project P                       我名下未完成任务
+  agentnexus claim    --project P --task T              认领任务（in_progress）
+  agentnexus update   --project P --task T --status S [--progress N] [--note M]
+                                                        更新任务状态/进度/说明
+  agentnexus handoff  --project P --task T --text M     任务交接（写入 task.handoff 并发消息）
+  agentnexus send     --project P --to A --text M       发消息（@A）
+  agentnexus accept   --project P --task T [--note M]   验收任务（done）
+  agentnexus reject   --project P --task T --note M     驳回任务（blocked）
+  agentnexus conclude --project P --title T --decision D [--status S]
+                                                        沉淀项目级决策（decisions[]）
+  agentnexus --install                                  软链到 /usr/local/bin 便于全局调用
+
+说明：
+  - 身份：onboard 后保存到 ~/.agentnexus.json，之后可省略 --name（或 --as 指定其他身份）
+  - 所有操作都写进项目的 collab_board.json，与引导词 Agent / API Agent 同看板协同
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.request
+import urllib.parse
+
+DEFAULT_URL = "http://localhost:8766"
+CONFIG_PATH = os.path.expanduser("~/.agentnexus.json")
+VERSION = "2.10"
+
+
+def load_cfg():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_cfg(cfg):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def api(base, path, method="GET", body=None):
+    url = base.rstrip("/") + path
+    req = urllib.request.Request(url, method=method)
+    req.add_header("Content-Type", "application/json")
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+    try:
+        with urllib.request.urlopen(req, data=data, timeout=15) as r:
+            raw = r.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {"ok": False, "error": f"HTTP {e.code}: {raw[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": f"{e}"}
+
+
+def need_name(args, cfg):
+    """取当前身份：--name > 配置默认身份"""
+    if getattr(args, "name", None):
+        return args.name
+    return cfg.get("name")
+
+
+def get_project(args):
+    return args.project
+
+
+# ---------- 命令实现 ----------
+
+def cmd_onboard(args):
+    cfg = load_cfg()
+    if not args.name:
+        print("需要 --name 指定你的身份名，例如 --name 前端开发Agent")
+        return 2
+    role = args.role or "终端接入 Agent（CLI）"
+    res = api(args.url, "/api/agents/register?project=" + urllib.parse.quote(args.project),
+              "POST", {"agent_id": args.name, "name": args.name, "role": role,
+                       "entry": {"type": "session", "note": "agentnexus cli"}})
+    if res.get("ok"):
+        cfg["name"] = args.name
+        cfg["url"] = args.url
+        save_cfg(cfg)
+        print(f"[接入成功] 身份「{args.name}」已注册到项目「{args.project}」")
+        print(f"        角色：{role}")
+        print(f"        已写入项目 collab_board.json，可与其他 Agent 在同一看板协同。")
+    else:
+        print(f"[接入失败] {res.get('message') or res.get('error')}")
+        return 1
+
+
+def cmd_status(args):
+    me = need_name(args, load_cfg())
+    data = api(args.url, "/api/board?project=" + urllib.parse.quote(args.project))
+    if not data.get("tasks"):
+        print(f"看板读取失败：{data.get('error', '空数据')}")
+        return 1
+    tasks = data["tasks"]
+    msgs = data.get("messages", [])
+    dec = data.get("decisions", [])
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.get("status") == "done")
+    doing = sum(1 for t in tasks if t.get("status") == "in_progress")
+    blocked = sum(1 for t in tasks if t.get("status") == "blocked")
+    todo = sum(1 for t in tasks if t.get("status") == "todo")
+    mine = [t for t in tasks if t.get("assignee") == me and t.get("status") != "done"]
+    mentions = [m for m in msgs if me and ("@" + me) in m.get("content", "")]
+    pname = (data.get("project_info") or {}).get("project_name") or args.project
+    print(f"== 项目：{pname} ==")
+    print(f"任务：{total} 个 | 进行中 {doing} | 待做 {todo} | 卡壳 {blocked} | 完成 {done}")
+    print(f"决策沉淀：{len(dec)} 条")
+    print(f"@我 的消息：{len(mentions)} 条")
+    print(f"我名下未完成任务：{len(mine)} 个")
+    for t in mine[:10]:
+        print(f"  [{t.get('status')}] {t.get('id')}  {t.get('title')}")
+    return 0
+
+
+def cmd_my_tasks(args):
+    me = need_name(args, load_cfg())
+    data = api(args.url, "/api/board?project=" + urllib.parse.quote(args.project))
+    tasks = data.get("tasks", [])
+    mine = [t for t in tasks if t.get("assignee") == me]
+    if not mine:
+        print(f"「{me}」名下暂无任务")
+        return 0
+    print(f"== 「{me}」的任务 ==")
+    for t in mine:
+        mark = "✓" if t.get("status") == "done" else "◌"
+        print(f"{mark} [{t.get('status')}] {t.get('id')}  {t.get('title')}")
+        if t.get("handoff"):
+            print(f"    交接: {t['handoff'].get('note', '')[:100]}")
+    return 0
+
+
+def cmd_claim(args):
+    me = need_name(args, load_cfg())
+    res = api(args.url, "/api/claim?project=" + urllib.parse.quote(args.project),
+              "POST", {"task_id": args.task, "assignee": me})
+    if res.get("ok"):
+        print(f"[认领成功] {args.task} → 「{me}」（in_progress）")
+    else:
+        print(f"[认领失败] {res.get('error')}")
+        return 1
+
+
+def cmd_update(args):
+    me = need_name(args, load_cfg())
+    body = {"status": args.status}
+    if args.progress is not None:
+        body["progress"] = args.progress
+    if args.note:
+        body["note"] = args.note
+    if me:
+        body["actor"] = me
+    res = api(args.url, "/api/tasks/" + urllib.parse.quote(args.task) + "?project=" + urllib.parse.quote(args.project),
+              "POST", body)
+    if res.get("ok"):
+        print(f"[更新成功] {args.task} → {args.status}" + (f"（{args.progress}%）" if args.progress else ""))
+        if args.note:
+            print(f"          备注：{args.note}")
+    else:
+        print(f"[更新失败] {res.get('error')}")
+        return 1
+
+
+def cmd_handoff(args):
+    me = need_name(args, load_cfg())
+    body = {"handoff": {"note": args.text, "by": me or "user",
+                        "ts": None}, "status": "handoff"}
+    res = api(args.url, "/api/tasks/" + urllib.parse.quote(args.task) + "?project=" + urllib.parse.quote(args.project),
+              "POST", body)
+    if not res.get("ok"):
+        print(f"[交接失败] {res.get('error')}")
+        return 1
+    # 并发一条消息通知下一位接手的 Agent
+    msg = api(args.url, "/api/messages?project=" + urllib.parse.quote(args.project),
+              "POST", {"sender": me or "user", "content": f"【任务交接】{args.task}：{args.text}"})
+    if msg.get("ok"):
+        print(f"[交接成功] {args.task} 已交接并留言看板")
+    else:
+        print(f"[交接部分失败] 任务已写 handoff，但消息发送失败：{msg.get('error')}")
+    return 0
+
+
+def cmd_send(args):
+    me = need_name(args, load_cfg())
+    res = api(args.url, "/api/messages?project=" + urllib.parse.quote(args.project),
+              "POST", {"sender": me or "user", "content": f"@{args.to} {args.text}"})
+    if res.get("ok"):
+        print(f"[已发送] @{args.to}：{args.text}")
+    else:
+        print(f"[发送失败] {res.get('error')}")
+        return 1
+
+
+def cmd_accept(args):
+    me = need_name(args, load_cfg())
+    body = {"status": "done"}
+    if args.note:
+        body["note"] = args.note
+    res = api(args.url, "/api/tasks/" + urllib.parse.quote(args.task) + "?project=" + urllib.parse.quote(args.project),
+              "POST", body)
+    if res.get("ok"):
+        print(f"[验收完成] {args.task} → done" + (f"（{args.note}）" if args.note else ""))
+    else:
+        print(f"[验收失败] {res.get('error')}")
+        return 1
+
+
+def cmd_reject(args):
+    me = need_name(args, load_cfg())
+    if not args.note:
+        print("驳回需要 --note 说明原因")
+        return 2
+    body = {"status": "blocked", "note": f"[驳回] {args.note}"}
+    res = api(args.url, "/api/tasks/" + urllib.parse.quote(args.task) + "?project=" + urllib.parse.quote(args.project),
+              "POST", body)
+    if res.get("ok"):
+        print(f"[已驳回] {args.task} → blocked（{args.note}）")
+    else:
+        print(f"[驳回失败] {res.get('error')}")
+        return 1
+
+
+def cmd_conclude(args):
+    me = need_name(args, load_cfg())
+    body = {"title": args.title, "decision": args.decision,
+            "status": args.status or "agreed", "by": me or "user"}
+    res = api(args.url, "/api/decisions?project=" + urllib.parse.quote(args.project), "POST", body)
+    if res.get("ok"):
+        print(f"[决策已沉淀] {args.title}（#{res.get('decision_id')}）")
+        print(f"            {args.decision}")
+    else:
+        print(f"[沉淀失败] {res.get('error')}")
+        return 1
+
+
+def cmd_install():
+    target = "/usr/local/bin/agentnexus"
+    src = os.path.abspath(__file__)
+    try:
+        os.makedirs("/usr/local/bin", exist_ok=True)
+        if os.path.exists(target):
+            os.remove(target)
+        os.symlink(src, target)
+        print(f"已安装：{target} → {src}")
+        print("现在可以直接在终端输入 agentnexus ... 使用")
+    except Exception as e:
+        print(f"安装失败：{e}")
+        print(f"可手动执行：ln -s {src} {target}")
+        return 1
+
+
+def main():
+    p = argparse.ArgumentParser(prog="agentnexus", description="AgentNexus 终端接入 CLI")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add_common(sp):
+        sp.add_argument("--project", "-p", required=True, help="项目名")
+        sp.add_argument("--name", "-n", help="身份名（默认用 onboard 保存的身份）")
+        sp.add_argument("--url", default=DEFAULT_URL, help=f"服务地址（默认 {DEFAULT_URL}）")
+
+    sp = sub.add_parser("onboard", help="接入：注册身份")
+    sp.add_argument("--project", "-p", required=True)
+    sp.add_argument("--name", "-n", required=True)
+    sp.add_argument("--role", "-r", help="身份与职责")
+    sp.add_argument("--url", default=DEFAULT_URL)
+
+    sp = sub.add_parser("status", help="项目概览"); add_common(sp)
+    sp = sub.add_parser("my-tasks", help="我的任务"); add_common(sp)
+    sp = sub.add_parser("claim", help="认领任务"); add_common(sp)
+    sp.add_argument("--task", "-t", required=True)
+    sp = sub.add_parser("update", help="更新任务"); add_common(sp)
+    sp.add_argument("--task", "-t", required=True)
+    sp.add_argument("--status", "-s", required=True, choices=["todo", "in_progress", "done", "blocked", "review"])
+    sp.add_argument("--progress", type=int, help="进度 0-100")
+    sp.add_argument("--note", help="备注")
+    sp = sub.add_parser("handoff", help="任务交接"); add_common(sp)
+    sp.add_argument("--task", "-t", required=True)
+    sp.add_argument("--text", required=True, help="交接说明")
+    sp = sub.add_parser("send", help="发消息"); add_common(sp)
+    sp.add_argument("--to", required=True, help="目标 Agent 名")
+    sp.add_argument("--text", required=True, help="消息内容")
+    sp = sub.add_parser("accept", help="验收任务"); add_common(sp)
+    sp.add_argument("--task", "-t", required=True)
+    sp.add_argument("--note", help="验收说明")
+    sp = sub.add_parser("reject", help="驳回任务"); add_common(sp)
+    sp.add_argument("--task", "-t", required=True)
+    sp.add_argument("--note", required=True, help="驳回原因")
+    sp = sub.add_parser("conclude", help="沉淀决策"); add_common(sp)
+    sp.add_argument("--title", required=True)
+    sp.add_argument("--decision", required=True)
+    sp.add_argument("--status", help="agreed / disputed / on-hold（默认 agreed）")
+    sp = sub.add_parser("--install", help="安装到 /usr/local/bin")
+
+    args = p.parse_args()
+    if args.cmd == "--install":
+        return cmd_install()
+    if not args.url.startswith("http"):
+        args.url = DEFAULT_URL
+    fn = {"onboard": cmd_onboard, "status": cmd_status, "my-tasks": cmd_my_tasks,
+          "claim": cmd_claim, "update": cmd_update, "handoff": cmd_handoff,
+          "send": cmd_send, "accept": cmd_accept, "reject": cmd_reject,
+          "conclude": cmd_conclude}.get(args.cmd)
+    if not fn:
+        p.print_help()
+        return 2
+    return fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

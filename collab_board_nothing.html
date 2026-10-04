@@ -1735,6 +1735,11 @@ function toggleNotificationSound(enabled) {
 // ===== 多项目支持（v2.0）=====
 // 从URL获取当前项目名，如 ?project=test-project
 const urlParams = new URLSearchParams(window.location.search);
+// embed 模式（组织视图看板浮层内嵌）：隐藏「组织视图」跳转按钮，右上角由父页面提供返回
+if (urlParams.get('embed') === '1') {
+  const _orgBtn = document.getElementById('org-toggle');
+  if (_orgBtn) _orgBtn.style.display = 'none';
+}
 const currentProject = urlParams.get('project');
 
 // 重写fetch函数，自动给所有 /api/ 开头的请求加上 ?project=xxx
@@ -1908,8 +1913,9 @@ function renderTaskCard(task, cfg) {
   const agent = boardData.agents.find(a => a.id === task.assignee);
   const agentColor = colorForAgent(task.assignee);
   const agentName = agent ? agent.name : task.assignee;
-  const depends = task.depends_on && task.depends_on.length > 0
-    ? `← ${task.depends_on.join(',')}` : '';
+  const dl = task.depends_on;
+  const depList = Array.isArray(dl) ? dl : (typeof dl === 'string' ? dl.split(/[,，]/).map(s => s.trim()).filter(Boolean) : []);
+  const depends = depList.length > 0 ? `← ${depList.join(',')}` : '';
 
   return `
     <div class="task-card ${selectedTaskId === task.id ? 'selected' : ''}"

@@ -125,6 +125,50 @@
   .legend svg { vertical-align: middle; }
   .legend span { margin-left: 4px; }
 
+  /* ===== 项目切换侧栏 ===== */
+  .proj-bar {
+    width: 176px; flex-shrink: 0;
+    border-right: 1px solid var(--line);
+    background: var(--bg-2);
+    overflow-y: auto;
+    padding: 12px 10px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .proj-bar-head {
+    font-size: 11px; font-family: var(--mono); letter-spacing: 1px;
+    color: var(--dim-2); margin: 4px 8px 12px;
+  }
+  .proj-item {
+    padding: 8px 10px; border-radius: var(--radius-sm);
+    font-size: 13px; color: var(--dim);
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border: 1px solid transparent;
+  }
+  .proj-item:hover { background: var(--panel); color: var(--text); }
+  .proj-item.active { background: var(--panel); color: var(--text); border-color: var(--line-2); font-weight: 600; }
+  .proj-item .cnt { float: right; font-family: var(--mono); font-size: 11px; color: var(--dim-2); font-weight: 400; margin-left: 6px; }
+
+  /* ===== 看板浮层（卡片盖在组织视图上） ===== */
+  .board-mask {
+    position: fixed; inset: 0; z-index: 100;
+    background: var(--bg);
+    display: none;
+  }
+  .board-mask.show { display: block; }
+  .board-frame { width: 100%; height: 100%; border: 0; display: block; }
+  .board-close {
+    position: fixed; top: 14px; right: 18px; z-index: 101;
+    border: 1px solid var(--line-2);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .board-close:hover { border-color: var(--accent); color: var(--accent); }
+
   /* ===== 主布局 ===== */
   .main { display: flex; height: calc(100% - 96px); }
   .canvas-wrap {
@@ -198,6 +242,16 @@
     color: var(--dim-2); margin-bottom: 10px;
     display: flex; align-items: center; justify-content: space-between;
   }
+  .decision-item {
+    border-left: 2px solid var(--accent);
+    padding: 6px 10px; margin-bottom: 8px;
+    background: var(--bg-2);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: 12px;
+  }
+  .decision-item .d-title { font-weight: 600; color: var(--text); }
+  .decision-item .d-meta { font-size: 11px; color: var(--dim-2); font-family: var(--mono); margin-top: 3px; }
+  .decision-item .d-body { color: var(--dim); margin-top: 3px; line-height: 1.5; }
   .big-num { font-size: 28px; font-weight: 700; font-family: var(--mono); color: var(--text); }
   .big-num.warn { color: var(--accent); }
   .big-num.sub { font-size: 14px; color: var(--dim); }
@@ -329,6 +383,10 @@
   </div>
   <div class="legend" id="legendBar"></div>
   <div class="main">
+    <div class="proj-bar" id="projBar">
+      <div class="proj-bar-head">项目</div>
+      <div class="proj-list" id="projList"></div>
+    </div>
     <div class="canvas-wrap" id="canvasWrap">
       <svg id="orgCanvas"></svg>
       <div id="nodeLayer"></div>
@@ -362,6 +420,12 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 看板浮层 -->
+  <div class="board-mask" id="boardModal">
+    <button class="board-close" id="boardClose" title="返回组织视图">← 返回组织</button>
+    <iframe class="board-frame" id="boardFrame" title="任务看板"></iframe>
   </div>
 
 <script>
@@ -593,7 +657,8 @@ function renderLines(order) {
     if (!t.assignee || t.status === 'done') continue;
     const related = (board.tasks || []).filter(x => x.id === t.id);
     // 依赖链上的相邻 assignee 也算协作
-    const deps = t.depends_on || [];
+    const dl = t.depends_on;
+    const deps = Array.isArray(dl) ? dl : (typeof dl === 'string' ? dl.split(/[,，]/).map(x => x.trim()).filter(Boolean) : []);
     for (const depId of deps) {
       const dep = (board.tasks || []).find(x => x.id === depId);
       if (dep && dep.assignee && dep.assignee !== t.assignee) {
@@ -659,6 +724,15 @@ function renderSide() {
           <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.title)}</span>
           <span class="who">${esc(whoName(t.assignee))}</span>
         </div>`).join('') : '<div class="pending-empty">全部闭合，没有在途事项</div>'}
+    </div>
+    <div class="panel">
+      <div class="panel-title">决策沉淀</div>
+      ${(board.decisions || []).length ? [...(board.decisions || [])].reverse().map(d => `
+        <div class="decision-item">
+          <div class="d-title">${esc(d.title)}</div>
+          <div class="d-body">${esc(d.decision)}</div>
+          <div class="d-meta">${esc(whoName(d.by))} · ${fmtTime(d.ts)} · ${esc(d.status)}</div>
+        </div>`).join('') : '<div class="pending-empty">还没有决策沉淀</div>'}
     </div>
     <div class="panel">
       <div class="panel-title">最近发生</div>
@@ -801,16 +875,48 @@ function renderLegend() {
   document.getElementById('legendBar').innerHTML = defaultLegend();
 }
 
+/* ===== 项目切换侧栏 ===== */
+async function loadProjects() {
+  try {
+    const resp = await fetch('/api/projects');
+    if (!resp.ok) throw new Error('projects ' + resp.status);
+    const data = await resp.json();
+    const list = (data.projects || []);
+    const el = document.getElementById('projList');
+    el.innerHTML = list.map(p => {
+      const name = p.name || p.project_name || '';
+      if (!name) return '';
+      const active = name === PROJECT;
+      const cnt = p.task_count ? p.task_count : '';
+      return `<div class="proj-item${active ? ' active' : ''}" title="${esc(name)}"
+        onclick="location.href='org_chart.html?project=${encodeURIComponent(name)}'">${esc(name)}${cnt ? `<span class="cnt">${cnt}</span>` : ''}</div>`;
+    }).join('') || '<div style="color:var(--dim-2);font-size:12px;padding:8px;">暂无项目</div>';
+  } catch (e) {
+    console.error('项目列表加载失败', e);
+  }
+}
+
+/* ===== 看板浮层 ===== */
+function openBoardModal() {
+  const src = 'collab_board_nothing.html' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : '') + '&embed=1';
+  document.getElementById('boardFrame').src = src;
+  document.getElementById('boardModal').classList.add('show');
+}
+function closeBoardModal() {
+  document.getElementById('boardModal').classList.remove('show');
+  document.getElementById('boardFrame').src = 'about:blank';
+}
+
 /* ===== 绑定 ===== */
-document.getElementById('btn-board').onclick = () => {
-  location.href = 'collab_board_nothing.html' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : '');
-};
+document.getElementById('btn-board').onclick = openBoardModal;
+document.getElementById('boardClose').onclick = closeBoardModal;
 document.getElementById('btn-position').onclick = openPos;
 document.getElementById('btn-edit').onclick = toggleEdit;
 
 (async function main() {
   try {
     await loadBoard();
+    loadProjects();
     // 自动刷新：30s 轮询（同看板节奏）
     setInterval(async () => { try { await loadBoard(); } catch (e) {} }, 30000);
   } catch (e) {
