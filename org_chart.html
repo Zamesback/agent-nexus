@@ -309,6 +309,19 @@
   .btn.mini.danger:hover { background: var(--accent); color: #fff; }
   .rename-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
   .rename-row input { flex: 1; background: var(--bg-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .invite-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; }
+  .mode-chip { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; background: transparent; }
+  .mode-chip.active { border-color: var(--accent); background: rgba(var(--accent-rgb), .08); }
+  .mode-chip span { font-size: 13px; font-weight: 600; color: var(--text); }
+  .mode-chip small { font-size: 11px; color: var(--dim); }
+  .invite-target { margin: 4px 0; }
+  .invite-body { padding: 4px 2px; }
+  .invite-tip { font-size: 12px; color: var(--dim); margin: 4px 0 8px; line-height: 1.5; }
+  #inviteText { width: 100%; box-sizing: border-box; min-height: 180px; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12.5px; font-family: var(--mono); line-height: 1.55; resize: vertical; }
+  .entry-badge { display: inline-block; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); margin-left: 6px; vertical-align: 1px; }
+  .entry-badge.guide { border-color: var(--accent); color: var(--accent); }
+  .entry-badge.api { border-color: var(--blue); color: var(--blue); }
+  .entry-badge.cli { border-color: var(--amber); color: var(--amber); }
   .modal-head {
     display: flex; align-items: center; gap: 12px;
     padding: 18px 20px; border-bottom: 1px solid var(--line);
@@ -416,17 +429,45 @@
 
   <!-- 加位子弹窗 -->
   <div class="modal-mask" id="posModal" onclick="if(event.target===this)closePos()">
-    <div class="modal" style="width:420px;">
+    <div class="modal" style="width:500px;">
       <div class="modal-head">
-        <div style="font-size:15px;font-weight:600;">＋ 加位子</div>
+        <div style="font-size:15px;font-weight:600;">＋ 拉人进班子</div>
         <button class="modal-close" onclick="closePos()">✕</button>
       </div>
       <div class="pos-form">
-        <input id="posName" placeholder="名字，如：试玩测试 / 前端开发 / 数据策划" maxlength="24">
-        <input id="posRole" placeholder="身份与职责，如：试玩反馈 / 验收最新版本" maxlength="60">
+        <input id="posName" placeholder="名字，如：前端开发 / 试玩测试 / 数据策划" maxlength="24">
+        <input id="posRole" placeholder="身份与职责，如：前端开发 / 试玩反馈" maxlength="60">
+        <div style="font-size:12px;color:var(--dim);margin:2px 0 4px;">接入方式</div>
+        <div class="invite-modes" id="inviteModes">
+          <div class="mode-chip active" data-mode="guide" onclick="pickMode('guide')"><span>引导词接入</span><small>生成身份引导文案，复制到目标 Agent 粘贴激活</small></div>
+          <div class="mode-chip" data-mode="api" onclick="pickMode('api')"><span>API 接入</span><small>HTTP 接口，适合有开发能力的 Agent</small></div>
+          <div class="mode-chip" data-mode="cli" onclick="pickMode('cli')"><span>CLI 接入</span><small>agentnexus 命令行，适合本地终端 Agent</small></div>
+          <div class="mode-chip" data-mode="manual" onclick="pickMode('manual')"><span>仅添加身份</span><small>先占位，稍后再接入</small></div>
+        </div>
+        <div class="invite-target" id="inviteTargetRow" style="display:none;">
+          <input id="posTarget" placeholder="API 接入地址（默认 http://localhost:8766）" maxlength="200">
+        </div>
         <div class="pos-actions">
           <button class="btn" onclick="closePos()">取消</button>
           <button class="btn primary" onclick="addPosition()">拉进来</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 接入配置结果 -->
+  <div class="modal-mask" id="inviteModal" onclick="if(event.target===this)closeInvite()">
+    <div class="modal" style="width:580px;">
+      <div class="modal-head">
+        <div id="inviteTitle" style="font-size:15px;font-weight:600;">接入配置</div>
+        <button class="modal-close" onclick="closeInvite()">✕</button>
+      </div>
+      <div class="invite-body">
+        <div class="invite-tip" id="inviteTip"></div>
+        <textarea id="inviteText" readonly spellcheck="false"></textarea>
+        <div class="pos-actions" style="margin-top:10px;">
+          <button class="btn" onclick="closeInvite()">完成</button>
+          <button class="btn primary" onclick="copyInvite()">复制接入文案</button>
         </div>
       </div>
     </div>
@@ -838,18 +879,26 @@ function openPerson(agentId) {
     .concat(others.map(o => `<option value="${esc(o.id)}" ${(a.reports_to || '') === o.id ? 'selected' : ''}>${esc(o.name || o.id)}</option>`))
     .join('');
   const whoName = (id) => { const x = agentById[id]; return x ? (x.name || id) : id; };
+  const entryTypeText = (x) => {
+    const t = x.entry_type || (x.entry && x.entry.type === 'http' ? 'api' : (x.entry && x.entry.target === '引导词接入' ? 'guide' : (x.entry && x.entry.type === 'cli' ? 'cli' : 'manual')));
+    return ({ guide: '引导词', api: 'API', cli: 'CLI', manual: '仅身份' })[t] || '仅身份';
+  };
   document.getElementById('personCard').innerHTML = `
     <div class="modal-head">
       <div class="badge" style="background:${color};">${esc(badgeText(a.name || a.id))}</div>
       <div>
         <div class="modal-name">${esc(a.name || a.id)} <span style="font-size:11px;color:var(--dim-2);font-family:var(--mono);">${esc(a.id)}</span></div>
-        <div class="modal-role">${esc(a.role || '未设定身份')} · <span style="color:${st.color};">${st.label}</span></div>
+        <div class="modal-role">${esc(a.role || '未设定身份')} · <span style="color:${st.color};">${st.label}</span>
+          ${agentId !== 'user' ? `<span class="entry-badge ${esc(a.entry_type || 'manual')}">${entryTypeText(a)}</span>` : ''}
+        </div>
       </div>
       <button class="modal-close" onclick="closePerson()">✕</button>
     </div>
     ${agentId === 'user' ? '' : `
     <div class="modal-ops">
       <button class="btn mini" onclick="renameAgent('${esc(a.id)}')">✎ 改名</button>
+      <button class="btn mini" onclick="renameRole('${esc(a.id)}')">✎ 身份</button>
+      ${(a.entry_type === 'guide' || (a.entry && a.entry.target === '引导词接入')) ? `<button class="btn mini" onclick="regenGuide('${esc(a.id)}')">重发引导词</button>` : ''}
       <button class="btn mini danger" onclick="removeAgent('${esc(a.id)}')">移除成员</button>
       <span style="font-size:11px;color:var(--dim-2);margin-left:auto;font-family:var(--mono);">拖动节点可自由排布</span>
     </div>`}
@@ -900,8 +949,38 @@ async function renameAgent(agentId) {
     body: JSON.stringify({ agent_id: agentId, name: name.trim() })
   });
   const r = await resp.json();
-  if (r.ok) { await loadBoard(); closePerson(); }
-  else alert(r.error || '改名失败');
+  if (r.ok) {
+    await loadBoard(); closePerson();
+    if (r.is_guide && r.guide) showInvite(name.trim(), 'guide', r.guide);
+  } else alert(r.error || '改名失败');
+}
+
+async function renameRole(agentId) {
+  const a = agentById[agentId];
+  if (!a) return;
+  const role = prompt('修改身份与职责（用于 Planner 派任务时识别；引导词接入的成员改后需重新粘贴引导词）：', a.role || '');
+  if (role === null) return;
+  const resp = await fetch('/api/agents/update' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, role: role.trim() })
+  });
+  const r = await resp.json();
+  if (r.ok) {
+    await loadBoard(); closePerson();
+    if (r.is_guide && r.guide) showInvite(a.name || agentId, 'guide', r.guide);
+  } else alert(r.error || '修改失败');
+}
+
+async function regenGuide(agentId) {
+  const a = agentById[agentId];
+  if (!a) return;
+  const resp = await fetch('/api/agents/update' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, name: a.name, role: a.role })
+  });
+  const r = await resp.json();
+  if (r.ok && r.guide) showInvite(a.name || agentId, 'guide', r.guide);
+  else alert('该成员不是引导词接入，无需重发引导词');
 }
 
 async function removeAgent(agentId) {
@@ -948,22 +1027,50 @@ async function sendMsgTo(agentId) {
 /* ===== 加位子 ===== */
 function openPos() { document.getElementById('posModal').classList.add('show'); }
 function closePos() { document.getElementById('posModal').classList.remove('show'); }
+let inviteMode = 'guide';
+function pickMode(mode) {
+  inviteMode = mode;
+  document.querySelectorAll('#inviteModes .mode-chip').forEach(c => c.classList.toggle('active', c.dataset.mode === mode));
+  document.getElementById('inviteTargetRow').style.display = mode === 'api' ? 'block' : 'none';
+}
 async function addPosition() {
   const name = document.getElementById('posName').value.trim();
   const role = document.getElementById('posRole').value.trim();
   if (!name) { alert('至少给个名字'); return; }
   const agentId = name.replace(/\s+/g, '');
-  const resp = await fetch('/api/org/position' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
+  const entryTarget = document.getElementById('posTarget').value.trim();
+  const resp = await fetch('/api/agents/invite' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : ''), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_id: agentId, name, role })
+    body: JSON.stringify({ agent_id: agentId, name, role, entry_type: inviteMode, entry_target: entryTarget })
   });
   const r = await resp.json();
-  if (r.ok) {
-    document.getElementById('posName').value = '';
-    document.getElementById('posRole').value = '';
-    closePos();
-    await loadBoard();
-  } else alert(r.error || '添加失败');
+  if (!r.ok) { alert(r.error || '拉人失败'); return; }
+  document.getElementById('posName').value = '';
+  document.getElementById('posRole').value = '';
+  document.getElementById('posTarget').value = '';
+  closePos();
+  await loadBoard();
+  if (r.guide) {
+    showInvite(r.name || name, inviteMode, r.guide);
+  }
+}
+function closeInvite() { document.getElementById('inviteModal').classList.remove('show'); }
+function copyInvite() {
+  const t = document.getElementById('inviteText');
+  navigator.clipboard.writeText(t.value).then(() => alert('已复制，去目标 Agent 粘贴吧')).catch(() => alert('复制失败，请手动选择复制'));
+}
+function showInvite(name, mode, text) {
+  const titles = { guide: `引导词 · ${name}`, api: `API 接入信息 · ${name}`, cli: `CLI 接入命令 · ${name}`, manual: `接入配置 · ${name}` };
+  const tips = {
+    guide: '把这整段文案复制，粘贴到目标 Agent（如豆包工作）的对话里，它会以此确认自己的身份并开始工作。',
+    api: '这是目标 Agent 需要的接口信息。把整段内容给接入方，对方按此轮询/调用看板。',
+    cli: '在目标机器终端执行 agentnexus onboard 完成接入（本机已安装则直接可用）。',
+    manual: ''
+  };
+  document.getElementById('inviteTitle').textContent = titles[mode] || titles.guide;
+  document.getElementById('inviteTip').textContent = tips[mode] || '';
+  document.getElementById('inviteText').value = text || '';
+  document.getElementById('inviteModal').classList.add('show');
 }
 
 /* ===== 编辑层级模式 ===== */

@@ -2,6 +2,23 @@
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
 
+## [v2.13.0] - 2026-10-04
+
+### New Features
+
+- **Invite members with real onboarding (multi-mode)**: "＋ 加位子" is now "拉人进班子" — besides a name and role you pick how the agent actually connects:
+  - **引导词接入 (guide)**: generates a full identity prompt (name / role / ID / work protocol) — copy & paste it into the target agent (e.g. Doubao Work) to activate; the guide is stored on the member record for re-sending anytime
+  - **API 接入 (api)**: outputs the HTTP endpoints (read board / send message / claim task / update task / conclude decision) for the agent to poll; an optional target URL is saved as the http entry
+  - **CLI 接入 (cli)**: prints the `agentnexus onboard` command + everyday commands for terminal agents
+  - **仅添加身份 (manual)**: placeholder only, same as the old behavior
+- **Editable role on the person card**: "✎ 身份" lets you change a member's role; "✎ 改名" remains. The card now shows an entry-method badge (引导词 / API / CLI / 仅身份).
+- **Identity-change awareness**: renaming or changing role posts a system message to the board (so the planner and collaborators see it), keeps the ID stable (assigned tasks unaffected), and — for guide-onboarded members — auto-opens the regenerated guide so you can re-paste it and keep the agent's self-identity in sync. A "重发引导词" button is on the card.
+
+### Notes
+
+- New API: POST `/api/agents/invite` (agent_id/name/role/entry_type/entry_target). `/api/agents/update` now returns `changed` + `guide` + `is_guide`.
+- Verified all four invite modes via API (entry + guide persisted in board & config); rename/role change leaves a system message and regenerates the guide; UI flow verified in browser (mode picker, target row toggle, guide result modal, person-card buttons & badge).
+
 ## [v2.12.0] - 2026-10-04
 
 ### New Features

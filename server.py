@@ -837,20 +837,134 @@ def register_agent(project, agent_id, entry, name=None, role=None):
     return True, f"Agent {agent_id} 注册成功"
 
 
+def build_guide(project, agent_id, name, role):
+    """v2.13: 生成引导词（供引导词接入的 Agent 粘贴，明确其身份认知）"""
+    role_txt = role or "成员"
+    return f"""你是「{project}」项目班子里的一名成员。
+
+【你的身份】
+- 名字：{name}
+- 身份 ID：{agent_id}（这是你的唯一标识，全程不要改动）
+- 职责：{role_txt}
+
+【协作方式】
+这个项目使用「协同看板」工作：任务、消息、决策都记录在项目目录下的 collab_board.json（或通过 /api/board?project={project} 读取）。你的所有工作都在看板上留痕。
+
+【工作协议】
+1. 开始工作前，先读取看板，了解项目背景、任务清单和你被分配/可认领的任务。
+2. 领取任务：找到分配给你（assignee 含 {agent_id}）或适合你职责的任务，用认领动作领取，并在回复里确认身份：「我是{name}（{agent_id}）」。
+3. 执行中持续更新任务状态（进行中/进度百分比），遇到阻塞及时在消息里说明并 @ 相关成员。
+4. 完成后把任务标记为待验收，留言交付说明；需要沉淀结论时写入决策记录。
+5. 定期检查看板更新（建议 2~5 分钟轮询一次），响应 @ 你的消息和新的任务指派。
+
+记住：你是 {name}，身份 ID {agent_id}，职责是 {role_txt}。"""
+
+
+def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_target=""):
+    """v2.13: 拉人进班子 + 配置接入方式
+
+    entry_type:
+      - guide: 引导词接入（生成引导文案，用户复制到目标 Agent 粘贴激活）
+      - api:   HTTP API 接入（entry.target 为接口地址/轮询地址）
+      - cli:   CLI 接入（tools/agentnexus）
+      - manual: 仅添加身份（原「加位子」行为，不产生接入配置）
+    返回 (success, message, guide)
+    """
+    entry_type = (entry_type or "manual").strip().lower()
+    if entry_type not in ("guide", "api", "cli", "manual"):
+        return False, "entry_type 必须是 guide/api/cli/manual", ""
+    if entry_type == "api":
+        entry = {"type": "http", "target": (entry_target or "").strip() or "http://localhost:8766"}
+        guide = f"""Agent 接入信息（API 模式）
+项目：{project}    身份：{name}（{role or '成员'}）    id：{agent_id}
+
+读取看板：  GET /api/board?project={project}
+发消息：    POST /api/messages?project={project}   body: {{"sender": "{agent_id}", "content": "..."}}
+领取任务：  POST /api/claim?project={project}     body: {{"task_id": "Txx", "assignee": "{agent_id}"}}
+更新任务：  POST /api/tasks/{{task_id}}?project={project}  body: {{"status": "doing", "progress": 40}}
+沉淀决策：  POST /api/decisions?project={project}  body: {{"title": "...", "decision": "..."}}
+
+协议：建议每 2~5 分钟轮询一次看板，响应 @ 你的消息和任务指派。"""
+    elif entry_type == "cli":
+        entry = {"type": "cli", "target": "tools/agentnexus"}
+        guide = f"""Agent 接入（CLI 模式）
+项目：{project}    身份：{name}（{role or '成员'}）    id：{agent_id}
+
+首次接入：
+  agentnexus onboard --project "{project}" --agent {agent_id} --name "{name}" --role "{role or '成员'}"
+
+常用命令：
+  agentnexus status --project "{project}"              # 看项目状态
+  agentnexus my-tasks --project "{project}"            # 我的任务
+  agentnexus claim --project "{project}" --task Txx    # 认领任务
+  agentnexus update --project "{project}" --task Txx --status doing --progress 40
+  agentnexus send --project "{project}" --to user --msg "你好"
+  agentnexus conclude --project "{project}" --title "决策标题" --decision "内容"
+
+协议：与看板 JSON 同源协同，你的身份保存在 ~/.agentnexus.json。"""
+    elif entry_type == "manual":
+        entry = {"type": "session", "target": "组织图手动添加"}
+        guide = ""
+    else:  # guide
+        entry = {"type": "session", "target": "引导词接入"}
+        guide = build_guide(project, agent_id, name, role)
+
+    # 写入 agent（复用 register_agent 合并逻辑，并携带 guide）
+    success, message = register_agent(project, agent_id, entry, name=name, role=role)
+    if not success:
+        return False, message, ""
+    # 把引导词存进 agent 记录（board + config）
+    try:
+        board = load_board(project)
+        for a in board.get("agents", []):
+            if a.get("id") == agent_id:
+                a["guide"] = guide
+                a["entry_type"] = entry_type
+                break
+        save_board(board, project)
+        cfg = load_config(project)
+        for a in cfg.get("agents", []):
+            if isinstance(a, dict) and a.get("id") == agent_id:
+                a["guide"] = guide
+                a["entry_type"] = entry_type
+                break
+        save_config(cfg, project)
+    except Exception:
+        pass
+    return True, f"已拉入 {name}（{entry_type} 接入）", guide
+
+
 def update_agent_profile(project, agent_id, name=None, role=None):
-    """v2.12: 成员改名 / 改身份——只更新 name/role，不动 entry/connected 接入状态"""
+    """v2.12+：成员改名 / 改身份——只更新 name/role，不动 entry/connected 接入状态
+
+    v2.13：变更后发系统消息留痕（帮助 Planner 与协作成员同步认知）；
+    返回 changed 明细与 guide（若该成员是引导词接入，改身份后需重新生成引导词）。"""
     board = load_board(project)
-    found = False
+    found = None
     for a in board.get("agents", []):
         if a.get("id") == agent_id:
-            if name:
-                a["name"] = name
-            if role is not None:
-                a["role"] = role
-            found = True
+            found = a
             break
     if not found:
-        return False, "成员不存在"
+        return False, "成员不存在", {}
+    changed = []
+    if name and name != found.get("name"):
+        old = found.get("name") or agent_id
+        found["name"] = name
+        changed.append(f"改名：{old} → {name}")
+    if role is not None and role != found.get("role"):
+        old = found.get("role") or "未设定身份"
+        found["role"] = role
+        changed.append(f"身份变更：{old} → {role}")
+    if changed:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        board.setdefault("messages", []).append({
+            "id": max([m.get("id", 0) for m in board.get("messages", [])], default=0) + 1,
+            "sender": "system",
+            "content": f"成员 {agent_id} {'；'.join(changed)}（身份 ID 不变，已派任务不受影响）",
+            "timestamp": now,
+            "type": "system"
+        })
     save_board(board, project)
     # 同步 config
     try:
@@ -865,7 +979,11 @@ def update_agent_profile(project, agent_id, name=None, role=None):
         save_config(cfg, project)
     except Exception:
         pass
-    return True, "已更新"
+    is_guide = (found.get("entry_type") == "guide") or (isinstance(found.get("entry"), dict) and found.get("entry", {}).get("target") == "引导词接入")
+    guide = ""
+    if is_guide and (changed or name or role is not None):
+        guide = build_guide(project, agent_id, found.get("name") or agent_id, found.get("role") or "")
+    return True, "已更新", {"changed": changed, "guide": guide, "is_guide": is_guide}
 
 
 def remove_agent(project, agent_id):
@@ -2146,6 +2264,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._handle_update_agent_profile(project)
             return
 
+        # API: 拉人进班子 + 接入配置（v2.13）
+        if parsed.path == "/api/agents/invite":
+            self._handle_invite_agent(project)
+            return
+
         # API: 移除成员（v2.12）
         if parsed.path == "/api/agents/remove":
             self._handle_remove_agent(project)
@@ -2470,8 +2593,10 @@ class CollabHandler(SimpleHTTPRequestHandler):
         if not agent_id:
             self._send_json({"ok": False, "error": "agent_id 不能为空"})
             return
-        success, message = update_agent_profile(project, agent_id, name=name or None, role=role)
-        self._send_json({"ok": success, "message": message, "agent_id": agent_id})
+        success, message, meta = update_agent_profile(project, agent_id, name=name or None, role=role)
+        self._send_json({"ok": success, "message": message, "agent_id": agent_id,
+                         "changed": meta.get("changed", []), "guide": meta.get("guide", ""),
+                         "is_guide": meta.get("is_guide", False)})
 
     def _handle_remove_agent(self, project=None):
         """v2.12: 移除成员"""
@@ -2485,6 +2610,27 @@ class CollabHandler(SimpleHTTPRequestHandler):
         agent_id = (req.get("agent_id") or "").strip()
         success, message = remove_agent(project, agent_id)
         self._send_json({"ok": success, "message": message, "agent_id": agent_id})
+
+    def _handle_invite_agent(self, project=None):
+        """v2.13: 拉人进班子，支持 guide/api/cli/manual 四种接入配置"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            req = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_error(400, "Invalid JSON")
+            return
+        agent_id = (req.get("agent_id") or "").strip()
+        name = (req.get("name") or "").strip() or agent_id
+        role = (req.get("role") or "").strip()
+        entry_type = (req.get("entry_type") or "guide").strip()
+        entry_target = (req.get("entry_target") or "").strip()
+        if not agent_id:
+            self._send_json({"ok": False, "error": "agent_id 不能为空"})
+            return
+        success, message, guide = invite_agent(project, agent_id, name, role, entry_type, entry_target)
+        self._send_json({"ok": success, "message": message, "agent_id": agent_id,
+                         "name": name, "guide": guide, "entry_type": entry_type})
 
     def _handle_org_relation(self, project=None):
         """v2.9: 批量设置组织汇报关系"""
