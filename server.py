@@ -2341,7 +2341,29 @@ def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
     tgt_dir = _dsh_member_profile_dir(project, agent_id)
     tgt_patch = _os.path.join(tgt_dir, "cordis.patch.yml")
     if _os.path.isfile(tgt_patch):
-        return tgt_dir  # 已生成过
+        # v2.18：模板若已含审批桥段而旧成员 profile 没有，则自动同步（否则权限请求无应答通道会秒退）
+        try:
+            tpl_body = open(tpl_patch, encoding="utf-8").read()
+            tgt_body = open(tgt_patch, encoding="utf-8").read()
+            if "agentnexus-approval-bridge" not in tgt_body:
+                idx = tpl_body.find("# AgentNexus 审批桥")
+                if idx >= 0:
+                    seg = tpl_body[idx:].rstrip("\n")
+                    open(tgt_patch, "a", encoding="utf-8").write("\n\n" + seg + "\n")
+                    _dsh_log("成员 profile 同步审批桥段: %s" % tgt_dir)
+        except Exception as e:
+            _dsh_log("成员 profile 同步失败 %s: %s" % (tgt_dir, e))
+        # v2.18：同步审批桥插件链接到成员 profile 的 node_modules（缺失则插件加载失败、进程秒退）
+        try:
+            pkgs_dir = _os.path.join(tgt_dir, "node_modules", "@deepseek-ai")
+            _os.makedirs(pkgs_dir, exist_ok=True)
+            link_dst = _os.path.join(pkgs_dir, "dsh-agentnexus-approval-bridge")
+            if not _os.path.islink(link_dst):
+                _os.symlink("/Users/zames/Desktop/Project/agent-collab-dev/tools/approval-bridge", link_dst)
+                _dsh_log("成员 profile 同步审批桥插件链接: %s" % tgt_dir)
+        except Exception as e:
+            _dsh_log("成员 profile 插件链接同步失败 %s: %s" % (tgt_dir, e))
+        return tgt_dir
     try:
         _os.makedirs(tgt_dir, exist_ok=True)
         # 复制模板全部文件（cordis.patch.yml / cordis.yml / package.json 等）
@@ -2359,6 +2381,14 @@ def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
         body = body.replace('--project "三国指挥官"', '--project "%s"' % project)
         body = body.replace("--name terminal", "--name %s" % agent_id)
         open(tgt_patch, "w", encoding="utf-8").write(body)
+        # v2.18：审批桥插件链接（模板 node_modules 目录不会被文件复制带过来）
+        try:
+            pkgs_dir = _os.path.join(tgt_dir, "node_modules", "@deepseek-ai")
+            _os.makedirs(pkgs_dir, exist_ok=True)
+            _os.symlink("/Users/zames/Desktop/Project/agent-collab-dev/tools/approval-bridge",
+                        _os.path.join(pkgs_dir, "dsh-agentnexus-approval-bridge"))
+        except Exception as e:
+            _dsh_log("成员 profile 插件链接失败 %s: %s" % (tgt_dir, e))
         _dsh_log("生成成员 profile: %s" % tgt_dir)
         return tgt_dir
     except Exception as e:
@@ -2514,7 +2544,9 @@ def _dsh_verify_model(profile_name=DSH_PROFILE):
 def _dsh_run(project, agent_id, dsh_input, session_id, emit):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
     import subprocess as _sp
+    _dsh_log("进入 _dsh_run: agent=%s sid=%s" % (agent_id, session_id))
     _lock_patch = _dsh_lock_patch(project)
+    _dsh_log("lock_patch=%s" % _lock_patch)
     # 按成员定位 profile（模板复制 + 身份替换）；失败回退模板 profile
     board = load_board(project)
     member = None
@@ -2530,22 +2562,32 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit):
     cmd = [DSH_NODE, DSH_CLI, "--profile", prof_name, "--patch", _lock_patch, "--json"]
     if session_id:
         cmd += ["--session-id", session_id]
-    cmd.append(message)
+    cmd.append(dsh_input)
     usage_agg = {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "totalTokens": 0}
     new_sid = session_id
     try:
         proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
-                         encoding="utf-8", errors="replace")
+                         encoding="utf-8", errors="replace", stdin=_sp.DEVNULL)
+        _dsh_log("Popen ok pid=%s cmd0=%s" % (proc.pid, proc.args[0] if isinstance(proc.args, list) else ""))
+        _first_ev = True
         for raw in proc.stdout:
             raw = raw.strip()
             if not raw:
                 continue
+            if _first_ev:
+                _first_ev = False
+                _dsh_log("dsh 首事件: %s" % raw[:80])
             try:
                 ev = json.loads(raw)
             except Exception:
                 continue
             if ev.get("type") == "session" and ev.get("sessionId"):
                 new_sid = ev["sessionId"]
+            # v2.18：审批桥内部事件 → 前端审批事件（挂起等待用户批准，dsh 进程阻塞等待应答文件）
+            if ev.get("type") == "agentnexus_approval":
+                ev["type"] = "approval"
+            elif ev.get("type") in ("agentnexus_bridge_loaded",):
+                continue
             u = ev.get("usage")
             if isinstance(u, dict):
                 for k in usage_agg:
@@ -2641,6 +2683,40 @@ def _handle_dsh_history_clear(self, project=None):
     member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     _dsh_save_member_cfg(project, agent_id, member_cfg)
     self._send_json({"ok": True, "message": "会话已清空（历史与 Agent 记忆均归零）"})
+
+DSH_ANSWER_FILE = "/tmp/agentnexus_answers.jsonl"
+
+def _dsh_approve_answer(request_id, option):
+    """把用户审批结果 append 到审批桥应答文件（行级原子，多成员共享；requestId 全局唯一）"""
+    import os as _os
+    try:
+        with open(DSH_ANSWER_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "agentnexus_approval_answer",
+                                "requestId": request_id, "option": option},
+                               ensure_ascii=False) + "\n")
+        return True
+    except Exception as e:
+        _dsh_log("审批应答写入失败: %s" % e)
+        return False
+
+def _handle_dsh_approve(self, project=None):
+    """POST /api/dsh/approve：用户批准/拒绝一次进程托管权限请求（写入审批桥应答文件）"""
+    try:
+        length = int(self.headers.get("Content-Length") or 0)
+        req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    except Exception:
+        req = {}
+    request_id = (req.get("requestId") or "").strip()
+    option = (req.get("option") or "").strip()
+    if not request_id or option not in ("allow", "reject"):
+        self._send_json({"ok": False,
+                         "error": "参数错误：需要 requestId + option(allow/reject)"}, status=400)
+        return
+    if not _dsh_approve_answer(request_id, option):
+        self._send_json({"ok": False, "error": "应答写入失败，请稍后重试"}, status=500)
+        return
+    _dsh_log("审批应答: request=%s option=%s" % (request_id, option))
+    self._send_json({"ok": True, "requestId": request_id, "option": option})
 
 def _handle_dsh_chat(self, project=None):
     """POST /api/dsh/chat  SSE 流式：留言给终端 Agent（按成员托管），回复实时回传"""
@@ -2920,6 +2996,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 会话清空（v2.17）
         if parsed.path == "/api/dsh/history/clear":
             _handle_dsh_history_clear(self, project)
+            return
+
+        # API: 终端 Agent 审批（v2.18 进程托管权限批准闭环）
+        if parsed.path == "/api/dsh/approve":
+            _handle_dsh_approve(self, project)
             return
 
         # API: 终端 Agent 会话（v2.15 进程托管）

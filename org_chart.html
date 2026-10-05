@@ -427,6 +427,16 @@
   /* ===== 终端会话（dsh 进程托管）===== */
   .dsh-status { font-size: 11px; font-family: var(--mono); color: var(--dim-2); margin: 6px 0 2px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .dsh-status .ok { color: #3fb950; }
+  .dsh-approval-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+  .dsh-approval { border: 1px solid rgba(234, 179, 8, .45); background: rgba(234, 179, 8, .07); border-radius: 10px; padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 5px; }
+  .dsh-approval .apv-head { font-weight: 600; color: var(--text); }
+  .dsh-approval .apv-tool { font-family: var(--mono); color: #eab308; }
+  .dsh-approval .apv-reason { color: var(--dim-1); line-height: 1.45; word-break: break-word; max-height: 72px; overflow-y: auto; }
+  .dsh-approval .apv-actions { display: flex; gap: 8px; }
+  .dsh-approval .apv-tip { font-size: 11px; color: var(--dim-2); }
+  .dsh-approval.apv-done-allow { border-color: rgba(63, 185, 80, .4); background: rgba(63, 185, 80, .06); }
+  .dsh-approval.apv-done-reject { border-color: rgba(248, 81, 73, .4); background: rgba(248, 81, 73, .06); opacity: .75; }
+  .dsh-approval .apv-done { font-weight: 600; color: var(--text); }
   .dsh-msgs { max-height: none; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 2px; }
   .dsh-msg { max-width: 88%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
   .dsh-msg.user { align-self: flex-end; background: #444; color: #fff; }
@@ -1131,6 +1141,7 @@ function openPerson(agentId) {
           <span class="dim" id="dshUsage">用量：${fmtTokens(dshTotalTokens())}</span>
           <button class="btn mini" onclick="clearDshHistory()" style="margin-left:auto;padding:2px 8px;font-size:11px;">清空会话</button>
         </div>
+        <div class="dsh-approval-list" id="dshApprovalList"></div>
         <div class="dsh-msgs" id="dshMsgs">${renderDshHistory()}</div>
         <div class="dsh-input-row">
           <input id="dshInput" placeholder="直接给终端 Agent 发指令（实时回复）…" onkeydown="if(event.key==='Enter'&&!event.isComposing)sendToTerminal()">
@@ -1371,6 +1382,10 @@ async function sendToTerminal() {
           if (!gotReply) { dshAppend('thinking', '（思考中…）'); gotReply = true; }
           continue;
         }
+        if (t === 'approval') {
+          renderApproval(ev);
+          continue;
+        }
         if (t === 'text') {
           replyContent = ev.text || '';
           if (!gotReply) { dshAppend('assistant', replyContent); gotReply = true; }
@@ -1407,6 +1422,61 @@ async function sendToTerminal() {
     dshAppend('assistant', '⚠️ 连接中断：' + e.message);
   } finally {
     btn.disabled = false; btn.textContent = '发送';
+  }
+}
+
+/* ===== 权限审批（v2.18 进程托管批准闭环） ===== */
+function renderApproval(ev) {
+  const list = document.getElementById('dshApprovalList');
+  if (!list) return;
+  const rid = ev.requestId || ('r' + Date.now());
+  if (document.getElementById('apv-' + rid)) return;  // 去重
+  const toolName = ev.toolName || '工具';
+  const reason = ev.reason || '';
+  const card = document.createElement('div');
+  card.className = 'dsh-approval';
+  card.id = 'apv-' + rid;
+  card.innerHTML =
+    '<div class="apv-head">⚠️ 需要你的批准 · <span class="apv-tool">' + esc(toolName) + '</span></div>' +
+    '<div class="apv-reason">' + esc(reason || '执行此操作需要权限升级') + '</div>' +
+    '<div class="apv-actions">' +
+      '<button class="btn mini" onclick="approveDshRequest(\'' + rid + '\',\'allow\',this)">批准</button>' +
+      '<button class="btn mini danger" onclick="approveDshRequest(\'' + rid + '\',\'reject\',this)">拒绝</button>' +
+    '</div>' +
+    '<div class="apv-tip">5 分钟内未操作将自动拒绝（安全默认）</div>';
+  list.appendChild(card);
+  list.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function approveDshRequest(requestId, option, btn) {
+  if (!btn) return;
+  btn.disabled = true;
+  const card = btn.closest('.dsh-approval');
+  try {
+    const resp = await fetch('/api/dsh/approve' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId, option })
+    });
+    const r = await resp.json().catch(() => ({}));
+    if (!r.ok) {
+      const tip = btn.parentElement.querySelector('.apv-tip');
+      if (tip) tip.textContent = '⚠️ 应答失败：' + (r.error || 'HTTP ' + resp.status);
+      btn.disabled = false;
+      return;
+    }
+    if (card) {
+      card.classList.add(option === 'allow' ? 'apv-done-allow' : 'apv-done-reject');
+      const acts = card.querySelector('.apv-actions');
+      if (acts) acts.innerHTML = '<span class="apv-done">' + (option === 'allow' ? '✓ 已批准，继续执行' : '✕ 已拒绝') + '</span>';
+      const tip = card.querySelector('.apv-tip');
+      if (tip) tip.remove();
+      const head = card.querySelector('.apv-head');
+      if (head) head.textContent = (option === 'allow' ? '✓ 已批准' : '✕ 已拒绝') + ' · ' + esc((card.querySelector('.apv-tool')||{}).textContent || '');
+    }
+  } catch (e) {
+    const tip = btn.parentElement.querySelector('.apv-tip');
+    if (tip) tip.textContent = '⚠️ 应答失败：' + e.message;
+    btn.disabled = false;
   }
 }
 

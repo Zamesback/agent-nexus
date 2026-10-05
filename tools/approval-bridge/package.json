@@ -1,0 +1,8 @@
+{
+  "name": "@deepseek-ai/dsh-agentnexus-approval-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AgentNexus approval bridge: forward dsh approval/request to stdout (NDJSON) and read answers from stdin.",
+  "main": "index.js",
+  "dependencies": {}
+}

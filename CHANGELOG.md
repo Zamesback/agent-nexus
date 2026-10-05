@@ -1,3 +1,11 @@
+## v2.18 — Human-in-the-loop approval for terminal-hosted agents
+
+- **Real approval bridge for dsh**: a terminal-hosted (dsh) agent that hits a sandbox permission wall (e.g. writing outside the workspace) used to fail silently — headless mode has no approval channel, so escalation requests were auto-rejected. Now a plugin (`tools/approval-bridge`, mounted into the dsh CLI via profile patch) intercepts the engine's `approval/request` event and emits it as NDJSON to stdout.
+- **Server relays approvals to the UI**: `server.py` forwards the event to the member chat panel as a typed `approval` SSE event; a new `POST /api/dsh/approve` writes the user's decision to a shared answer file that the bridge polls.
+- **In-tool approval card**: the member card renders「⚠️ 需要你的批准」with the tool name and the escalation reason, plus **批准 / 拒绝** buttons and a clear「5 分钟内未操作将自动拒绝（安全默认）」notice. Approving answers `allow-once` (the exact command re-runs with full access); rejecting fails closed. This is a one-shot allow — no blanket `allow-always` in v1.
+- **Profile self-healing**: `_dsh_ensure_profile` now syncs the approval-bridge patch and plugin symlink onto legacy member profiles, and new hosted members get both at creation — so existing members keep working after upgrade.
+- Verified end to end: sandbox-denied bash → escalation request → approval card in browser → 批准 → file written by the agent → card marked「✓ 已批准」.
+
 ## v2.17.1 — Terminal-hosted member detection fix (dual-field compatibility)
 
 - **Access-type mismatch fix**: a terminal-hosted (dsh) member could end up with `entry.type=session` when the agentnexus CLI onboard (8767 inbox) re-registered the same identity, breaking chat. Detection now accepts the top-level `entry_type === 'dsh'` and the member's `dsh.members` config as authoritative too, so a hosted member stays chat-enabled no matter what `entry.type` says.
