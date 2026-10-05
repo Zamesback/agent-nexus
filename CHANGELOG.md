@@ -1,4 +1,10 @@
-## v2.17 — Chat history persistence + fullscreen member card
+## v2.17.1 — Terminal-hosted member detection fix (dual-field compatibility)
+
+- **Access-type mismatch fix**: a terminal-hosted (dsh) member could end up with `entry.type=session` when the agentnexus CLI onboard (8767 inbox) re-registered the same identity, breaking chat. Detection now accepts the top-level `entry_type === 'dsh'` and the member's `dsh.members` config as authoritative too, so a hosted member stays chat-enabled no matter what `entry.type` says.
+- **Member badge**: the invite-mode badge now shows「终端托管」for dsh members (was falling back to「仅身份」).
+- Fixed the 三国指挥官「设计总负责DSH-1」board/config entry back to `dsh` (both collab_board.json and project_config.json).
+
+## v2.17 — Chat history persistence + fullscreen member card Chat history persistence + fullscreen member card
 
 - **Chat history is now real**: per-member terminal chats persist to `<PROJECTS_ROOT>/<project>/dsh_chat/<agent>.json` — the user message is written immediately when the request arrives (so a question is never lost, even if the run fails or the page refreshes), and the assistant reply plus token usage is appended on success. 600-message cap, atomic writes (tmp + rename). History follows the project folder, so it survives browser refreshes, cache clears, and works across browsers/devices.
 - **New APIs**: `GET /api/dsh/history?project=X&agent=<id>` returns the persisted history plus the member's cumulative usage; `POST /api/dsh/history/clear` wipes the history file, the member's session_id and usage — so clearing the chat also resets the agent's memory (fixes the old split where the frontend cleared localStorage but the process memory stayed).

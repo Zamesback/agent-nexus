@@ -2661,7 +2661,11 @@ def _handle_dsh_chat(self, project=None):
         self._send_json({"ok": False, "error": "看板中不存在成员 %s，请先在组织视图拉入「终端托管」成员。" % agent_id}, status=400)
         return
     entry_t = (member.get("entry") or {}).get("type", "")
-    is_terminal_member = (agent_id == "terminal") or (entry_t == "dsh") or ("终端" in (member.get("role") or ""))
+    # v2.17.1：接入类型双字段兼容——entry.type 可能被 CLI onboard（8767）覆写为 session，
+    # 但顶层 entry_type=dsh 或 dsh.members 有会话配置说明仍是终端托管成员
+    has_dsh_cfg = bool((_dsh_member_cfg(project, agent_id) or {}).get("session_id") or
+                       (_dsh_member_cfg(project, agent_id) or {}).get("usage"))
+    is_terminal_member = (agent_id == "terminal") or (entry_t == "dsh") or (member.get("entry_type") == "dsh") or                          ("终端" in (member.get("role") or "")) or has_dsh_cfg
     if not is_terminal_member:
         self._send_json({"ok": False, "error": "成员 %s 不是终端托管成员（entry.type=%s），无法进行进程托管对话。" % (agent_id, entry_t or "无")}, status=400)
         return

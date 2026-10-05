@@ -1070,7 +1070,7 @@ function openPerson(agentId) {
   const whoName = (id) => { const x = agentById[id]; return x ? (x.name || id) : id; };
   const entryTypeText = (x) => {
     const t = x.entry_type || (x.entry && x.entry.type === 'http' ? 'api' : (x.entry && x.entry.target === '引导词接入' ? 'guide' : (x.entry && x.entry.type === 'cli' ? 'cli' : (x.entry && x.entry.type === 'dsh' ? 'dsh' : 'manual'))));
-    return ({ guide: '引导词', api: 'API', cli: 'CLI', manual: '仅身份' })[t] || '仅身份';
+    return ({ guide: '引导词', api: 'API', cli: 'CLI', dsh: '终端托管', manual: '仅身份' })[t] || '仅身份';
   };
   document.getElementById('personCard').innerHTML = `
     <div class="modal-head">
