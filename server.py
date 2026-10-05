@@ -928,21 +928,21 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
 协议：建议每 2~5 分钟轮询一次看板，响应 @ 你的消息和任务指派。"""
     elif entry_type == "cli":
         entry = {"type": "cli", "target": "tools/agentnexus"}
-        guide = f"""Agent 接入（CLI 模式）
-项目：{project}    身份：{name}（{role or '成员'}）    id：{agent_id}
+        base = build_guide(project, agent_id, name, role)
+        guide = base + f"""
 
-首次接入：
-  agentnexus onboard --project "{project}" --agent {agent_id} --name "{name}" --role "{role or '成员'}"
-
+【你的操作方式 · CLI（agentnexus 命令）】
+你不是聊天界面 Agent，而是终端 Agent——通过 agentnexus 命令行读写看板（身份保存在 ~/.agentnexus.json）：
+首次接入：  agentnexus onboard --project "{project}" --agent {agent_id} --name "{name}" --role "{role or '成员'}"
 常用命令：
-  agentnexus status --project "{project}"              # 看项目状态
+  agentnexus status --project "{project}"              # 项目概览（含 @ 你的消息）
   agentnexus my-tasks --project "{project}"            # 我的任务
-  agentnexus claim --project "{project}" --task Txx    # 认领任务
-  agentnexus update --project "{project}" --task Txx --status doing --progress 40
-  agentnexus send --project "{project}" --to user --msg "你好"
+  agentnexus claim --project "{project}" --task Txx    # 认领任务（in_progress）
+  agentnexus update --project "{project}" --task Txx --status in_progress --progress 40
+  agentnexus send --project "{project}" --to planner --msg "你好"   # 发消息（@planner）
   agentnexus conclude --project "{project}" --title "决策标题" --decision "内容"
 
-协议：与看板 JSON 同源协同，你的身份保存在 ~/.agentnexus.json。"""
+轮询对齐：按上方【协作协议·工作态/收工态】执行——工作态下每 30 分钟用 agentnexus status 检查 @ 消息与任务指派；收工态停止主动检查。"""
     elif entry_type == "manual":
         entry = {"type": "session", "target": "组织图手动添加"}
         guide = ""
