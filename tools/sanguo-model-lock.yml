@@ -1,0 +1,7 @@
+# AgentNexus v2.15 模型硬锁 overlay：CLI 层最高优先级，防止任何存储/会话状态漂移
+# dsh 启动时以 --patch 传入，应用顺序在 profile 之后，覆盖 agent-default-model
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-flash

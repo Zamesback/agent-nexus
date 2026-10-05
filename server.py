@@ -2332,7 +2332,8 @@ def _dsh_verify_model():
 def _dsh_run(project, message, session_id, emit):
     """拉起 dsh headless 进程，流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
     import subprocess as _sp
-    cmd = [DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--json"]
+    _lock_patch = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "sanguo-model-lock.yml")
+    cmd = [DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--patch", _lock_patch, "--json"]
     if session_id:
         cmd += ["--session-id", session_id]
     cmd.append(message)
