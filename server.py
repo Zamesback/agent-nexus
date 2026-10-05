@@ -16,7 +16,7 @@ import base64
 import threading
 import fcntl
 from contextlib import contextmanager
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 # 配置
@@ -2250,6 +2250,213 @@ def _record_api_error(error_msg, error_type, config, save=True):
         print(f"记录错误失败: {e}")
 
 
+
+# ================= dsh 进程托管（v2.15：终端 Agent 进程接入） =================
+def _dsh_find_node():
+    """探测可用的 node 可执行文件：优先显式指定，其次真实系统常见路径，回退沙箱 node"""
+    import os as _os, shutil as _sh
+    cands = [
+        _os.environ.get("DSH_NODE", ""),
+        "/usr/local/bin/node",
+        "/opt/homebrew/bin/node",
+        "/Users/zames/Library/Application Support/DoubaoWork/sandbox_runtime/bases/98670218a5f0d8bc9b9ebf3f70881304/bin/node",
+        "/Users/zames/.local/bin/node",
+        "/Users/zames/.bun/bin/node",
+    ]
+    for c in cands:
+        if c and _os.path.isfile(c) and _os.access(c, _os.X_OK):
+            return c
+    return "node"  # 最后尝试 PATH
+
+DSH_NODE = _dsh_find_node()
+DSH_CLI = "/Users/zames/deepseek-harness/apps/cli/lib/bin.js"
+DSH_PROFILE = "sanguo-dsh"          # 三国指挥官专属 profile（锁 DeepSeek Flash + 看板协同指令）
+DSH_AGENT_ID = "terminal"           # 该会话在看板中的身份 ID
+def _dsh_log(msg):
+    try:
+        with open("/tmp/dsh_server.log", "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), msg))
+    except Exception:
+        pass
+
+DSH_MODEL_WHITELIST = {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash",
+                       "deepseek-v4-flash-vision", "deepseek-v4-flash-vision-experience"}
+
+def _dsh_config_path(project):
+    files = get_project_files(project)
+    return files.get("config_file")
+
+def _dsh_load_cfg(project):
+    p = _dsh_config_path(project)
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _dsh_save_cfg(project, cfg):
+    p = _dsh_config_path(project)
+    try:
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, p)
+    except Exception:
+        pass
+
+def _dsh_verify_model():
+    """启动前校验 profile 锁定的模型在白名单内（防误选昂贵模型）"""
+    try:
+        import subprocess as _sp
+        out = _sp.run([DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--dump-config"],
+                      capture_output=True, text=True, timeout=30)
+        cfg = out.stdout or ""
+        model = None
+        provider = None
+        in_agent_model = False
+        for line in cfg.splitlines():
+            if "agent-default-model" in line:
+                in_agent_model = True
+            if in_agent_model and line.strip().startswith("model:"):
+                model = line.split(":", 1)[1].strip()
+            if in_agent_model and line.strip().startswith("provider:"):
+                provider = line.split(":", 1)[1].strip()
+            if in_agent_model and not line.startswith((" ", "-", "#")):
+                in_agent_model = False
+        if model not in DSH_MODEL_WHITELIST:
+            return False, f"模型校验失败：当前 {provider}/{model} 不在白名单 {sorted(DSH_MODEL_WHITELIST)}，拒绝启动"
+        return True, f"模型校验通过：{provider}/{model}"
+    except Exception as e:
+        return False, f"模型校验异常：{e}"
+
+def _dsh_run(project, message, session_id, emit):
+    """拉起 dsh headless 进程，流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
+    import subprocess as _sp
+    cmd = [DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--json"]
+    if session_id:
+        cmd += ["--session-id", session_id]
+    cmd.append(message)
+    usage_agg = {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "totalTokens": 0}
+    new_sid = session_id
+    try:
+        proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+                         encoding="utf-8", errors="replace")
+        for raw in proc.stdout:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except Exception:
+                continue
+            if ev.get("type") == "session" and ev.get("sessionId"):
+                new_sid = ev["sessionId"]
+            u = ev.get("usage")
+            if isinstance(u, dict):
+                for k in usage_agg:
+                    if k in u and isinstance(u[k], (int, float)):
+                        usage_agg[k] += u[k]
+            if emit:
+                emit(ev)
+        proc.wait(timeout=180)
+        err = proc.stderr.read()[:800] if proc.stderr else ""
+        if proc.returncode != 0:
+            _dsh_log("dsh 子进程失败: rc=%s stderr=%s" % (proc.returncode, err[:300]))
+            return (False, new_sid, usage_agg)
+        return (True, new_sid, usage_agg)
+    except Exception as e:
+        _dsh_log("dsh 子进程异常: %s" % e)
+        return (False, new_sid, usage_agg)
+
+def _handle_dsh_chat(self, project=None):
+    """POST /api/dsh/chat  SSE 流式：留言给终端 Agent，回复实时回传"""
+    import subprocess as _sp
+    _dsh_log("dsh/chat 进入: project=%s path=%s" % (project, self.path))
+    _dsh_log("DSH_NODE=%s DSH_CLI=%s" % (DSH_NODE, DSH_CLI))
+    # 1) 模型白名单校验
+    ok, msg = _dsh_verify_model()
+    _dsh_log("verify: ok=%s %s" % (ok, msg))
+    if not ok:
+        self._send_json({"ok": False, "error": msg}, status=403)
+        return
+    # 2) 收工态检查
+    data = load_board(project)
+    proto = (data or {}).get("protocol") or {}
+    _dsh_log("protocol.mode=%s" % proto.get("mode"))
+    if proto.get("mode") == "off":
+        self._send_json({"ok": False, "error": "项目处于收工态（off），终端 Agent 已休眠。请先开工再对话。"}, status=403)
+        return
+    # 3) 读 body
+    try:
+        length = int(self.headers.get("Content-Length") or 0)
+        req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    except Exception:
+        req = {}
+    message = (req.get("message") or "").strip()
+    session_id = req.get("session_id") or ""
+    _dsh_log("message=%s session=%s" % (message[:30], session_id))
+    if not message:
+        self._send_json({"ok": False, "error": "message 不能为空"}, status=400)
+        return
+    # 4) 复用/新会话
+    cfg = _dsh_load_cfg(project)
+    dsh_cfg = cfg.get("dsh") or {}
+    if not session_id:
+        session_id = dsh_cfg.get("session_id") or ""
+    # 5) SSE 流式响应
+    _dsh_log("开始 SSE 响应")
+    self.send_response(200)
+    self.send_header("Content-Type", "text/event-stream")
+    self.send_header("Cache-Control", "no-cache")
+    self.send_header("X-Accel-Buffering", "no")
+    self.end_headers()
+    def emit(ev):
+        try:
+            self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+        except Exception:
+            pass
+    _dsh_log("调用 _dsh_run")
+    import threading as _th
+    _dsh_locks = globals().get("_DSH_LOCKS")
+    if _dsh_locks is None:
+        _DSH_LOCKS = {}
+        _dsh_locks = _DSH_LOCKS
+    lock = _dsh_locks.setdefault(project, _th.Lock())
+    with lock:
+        ok, new_sid, usage = _dsh_run(project, message, session_id, emit)
+        _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
+        if not ok and session_id:
+            # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
+            import time as _time
+            _time.sleep(3)
+            ok2, new_sid2, usage2 = _dsh_run(project, message, session_id, emit)
+            _dsh_log("占用重试: ok=%s sid=%s" % (ok2, new_sid2))
+            if not ok2:
+                ok3, new_sid3, usage3 = _dsh_run(project, message, "", emit)
+                _dsh_log("换新会话: ok=%s sid=%s" % (ok3, new_sid3))
+                if ok3:
+                    ok, new_sid, usage = True, new_sid3, usage3
+            elif ok2:
+                ok, new_sid, usage = True, new_sid2, usage2
+    if not new_sid and ok:
+        # 兜底：无 session 事件
+        new_sid = "session-" + project
+    # 6) 用量落盘
+    if ok:
+        dsh_cfg["session_id"] = new_sid
+        dsh_cfg.setdefault("usage", {}).setdefault("inputTokens", 0)
+        dsh_cfg["usage"]["inputTokens"] += usage.get("inputTokens", 0)
+        dsh_cfg["usage"]["outputTokens"] = dsh_cfg["usage"].get("outputTokens", 0) + usage.get("outputTokens", 0)
+        dsh_cfg["usage"]["cacheReadTokens"] = dsh_cfg["usage"].get("cacheReadTokens", 0) + usage.get("cacheReadTokens", 0)
+        dsh_cfg["usage"]["totalTokens"] = (dsh_cfg["usage"].get("inputTokens", 0)
+                                             + dsh_cfg["usage"].get("outputTokens", 0))
+        dsh_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        cfg["dsh"] = dsh_cfg
+        _dsh_save_cfg(project, cfg)
+    emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
+          "usage": usage, "total_usage": dsh_cfg.get("usage", {})})
+
 class CollabHandler(SimpleHTTPRequestHandler):
     """协作看板请求处理器"""
 
@@ -2384,6 +2591,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         """处理 POST 请求"""
         parsed = urlparse(self.path)
         project = self._get_project()
+
+        # API: 终端 Agent 会话（v2.15 进程托管）
+        if parsed.path == "/api/dsh/chat":
+            _handle_dsh_chat(self, project)
+            return
 
         # API: 创建新项目（多项目管理）
         if parsed.path == "/api/projects":
@@ -2988,7 +3200,7 @@ def main():
     else:
         print(f"数据文件: {BOARD_FILE}")
 
-    server = HTTPServer(("0.0.0.0", port), CollabHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), CollabHandler)
     print(f"\n{'='*60}")
     print(f"  多Agent协作看板 · 最小原型")
     print(f"{'='*60}")

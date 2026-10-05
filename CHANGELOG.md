@@ -1,3 +1,14 @@
+## v2.15 — Terminal Agent Process Hosting (dsh)
+
+**New: fifth access mode — terminal agent process hosting.** The board now launches a DeepSeek Harness (dsh) agent process on the user's machine and serves it through a real-time chatbox in the org view, while the JSON board remains the single source of truth.
+
+- **Model hard-lock**: project-specific dsh profile (`sanguo-dsh`) locks DeepSeek Flash (deepseek-official/deepseek-flash) and a server-side whitelist rejects any drift, preventing accidental expensive models.
+- **`POST /api/dsh/chat` (SSE streaming)**: model whitelist check → work-mode check (sleeps in off mode) → session reuse → streamed NDJSON events (thinking/text/final) → usage persisted to `project_config.json`.
+- **Board collaboration**: the dsh session reads/writes the board via `agentnexus` CLI (claim/update/send), so planner-side polling sees real state changes (verified: claim T54 → in_progress, auto git commit).
+- **Org view terminal panel**: terminal member card opens an embedded chatbox with streaming replies, token usage (real billing basis: input+output, cache-read excluded), session clear.
+- **Robustness**: `ThreadingHTTPServer` for SSE; per-project serial lock; auto retry and fresh-session fallback on transient session write-handle conflicts.
+- Node auto-discovery (env `DSH_NODE` → common paths → bundled fallback).
+
 # Changelog
 
 This file records version changes for AgentNexus. Version numbers follow Semantic Versioning (SemVer): `MAJOR.MINOR.PATCH`.
