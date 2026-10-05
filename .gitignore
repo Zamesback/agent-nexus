@@ -11,6 +11,8 @@ api_calls.log
 
 # 锁文件
 *.lock
+# 动态生成的模型锁 overlay（运行时产物）
+tools/*-model-lock.yml
 
 # Python缓存
 __pycache__/

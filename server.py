@@ -2370,6 +2370,49 @@ def _dsh_profile_name(project, agent_id):
     d = _dsh_member_profile_dir(project, agent_id)
     return "dsh-" + _dsh_safe(project) + "-" + _dsh_safe(agent_id) if d else DSH_PROFILE_TEMPLATE
 
+# ---- v2.17：聊天历史持久化（按成员，项目目录 dsh_chat/，随项目纳入版本管理） ----
+_HISTORY_MAX = 600
+def _dsh_history_path(project, agent_id):
+    """历史文件：<PROJECTS_ROOT>/<项目>/dsh_chat/<agent>.json"""
+    import os as _os
+    d = _os.path.join(PROJECTS_ROOT, project, "dsh_chat")
+    return _os.path.join(d, _dsh_safe(agent_id) + ".json")
+
+def _dsh_load_history(project, agent_id):
+    try:
+        with open(_dsh_history_path(project, agent_id), encoding="utf-8") as f:
+            h = json.load(f)
+        return h if isinstance(h, list) else []
+    except Exception:
+        return []
+
+def _dsh_append_history(project, agent_id, entries):
+    """原子追加历史（读-追加-写回，上限 _HISTORY_MAX 条）"""
+    import os as _os
+    p = _dsh_history_path(project, agent_id)
+    try:
+        h = _dsh_load_history(project, agent_id)
+        h.extend(entries)
+        if len(h) > _HISTORY_MAX:
+            h = h[-_HISTORY_MAX:]
+        _os.makedirs(_os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(h, f, ensure_ascii=False, indent=1)
+        _os.replace(tmp, p)
+    except Exception as e:
+        _dsh_log("历史写入失败: %s" % e)
+
+def _dsh_clear_history(project, agent_id):
+    import os as _os
+    try:
+        p = _dsh_history_path(project, agent_id)
+        if _os.path.exists(p):
+            _os.remove(p)
+        return True
+    except Exception:
+        return False
+
 def _dsh_member_cfg(project, agent_id):
     """读成员会话配置（project_config.json dsh.members.<agent_id>；terminal 兼容回退 dsh 根键）"""
     cfg = _dsh_load_cfg(project)
@@ -2468,7 +2511,7 @@ def _dsh_verify_model(profile_name=DSH_PROFILE):
     except Exception as e:
         return False, f"模型校验异常：{e}"
 
-def _dsh_run(project, agent_id, message, session_id, emit):
+def _dsh_run(project, agent_id, dsh_input, session_id, emit):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
     import subprocess as _sp
     _lock_patch = _dsh_lock_patch(project)
@@ -2559,6 +2602,46 @@ def _handle_dsh_model(self, project=None):
         self._send_json({"ok": True, "model": model,
                          "note": "已生效：下一次消息将使用新模型（会话已重置）"})
 
+def _handle_dsh_history(self, project=None):
+    """GET /api/dsh/history?project=X&agent=<id>：读取成员聊天历史 + 累计用量"""
+    parsed = urlparse(self.path)
+    params = parse_qs(parsed.query)
+    agent_id = params.get("agent", [None])[0] or "terminal"
+    board0 = load_board(project)
+    member = None
+    for a in (board0 or {}).get("agents", []) or []:
+        if a.get("id") == agent_id:
+            member = a
+            break
+    if not member:
+        self._send_json({"ok": False, "error": "看板中不存在成员 %s。" % agent_id}, status=400)
+        return
+    history = _dsh_load_history(project, agent_id)
+    member_cfg = _dsh_member_cfg(project, agent_id)
+    self._send_json({"ok": True, "history": history, "total_usage": member_cfg.get("usage", {})})
+
+def _handle_dsh_history_clear(self, project=None):
+    """POST /api/dsh/history/clear?project=X&agent=<id>：清空该成员聊天历史 + 会话（session/用量归零）"""
+    parsed = urlparse(self.path)
+    params = parse_qs(parsed.query)
+    agent_id = params.get("agent", [None])[0] or "terminal"
+    board0 = load_board(project)
+    member = None
+    for a in (board0 or {}).get("agents", []) or []:
+        if a.get("id") == agent_id:
+            member = a
+            break
+    if not member:
+        self._send_json({"ok": False, "error": "看板中不存在成员 %s。" % agent_id}, status=400)
+        return
+    _dsh_clear_history(project, agent_id)
+    member_cfg = _dsh_member_cfg(project, agent_id) or {}
+    member_cfg["session_id"] = ""
+    member_cfg["usage"] = {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "totalTokens": 0}
+    member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    _dsh_save_member_cfg(project, agent_id, member_cfg)
+    self._send_json({"ok": True, "message": "会话已清空（历史与 Agent 记忆均归零）"})
+
 def _handle_dsh_chat(self, project=None):
     """POST /api/dsh/chat  SSE 流式：留言给终端 Agent（按成员托管），回复实时回传"""
     import subprocess as _sp
@@ -2604,15 +2687,23 @@ def _handle_dsh_chat(self, project=None):
     except Exception:
         req = {}
     message = (req.get("message") or "").strip()
+    context = (req.get("context") or "").strip()  # v2.17：独立上下文（不污染落盘内容）
     session_id = req.get("session_id") or ""
     _dsh_log("message=%s session=%s" % (message[:30], session_id))
     if not message:
         self._send_json({"ok": False, "error": "message 不能为空"}, status=400)
         return
+    # v2.17：给 dsh 的完整输入 = 上下文 + 新消息；历史落盘只用纯 message
+    dsh_input = (context + "\n\n【现在的新消息】" + message) if context else message
     # 4) 复用/新会话（按成员）
     member_cfg = _dsh_member_cfg(project, agent_id)
     if not session_id:
         session_id = member_cfg.get("session_id") or ""
+    # 4b) v2.17：用户消息立即持久化（即使本轮失败/中断，提问也不丢）
+    _dsh_append_history(project, agent_id, [{
+        "role": "user", "content": message,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    }])
     # 5) SSE 流式响应
     _dsh_log("开始 SSE 响应")
     self.send_response(200)
@@ -2620,7 +2711,11 @@ def _handle_dsh_chat(self, project=None):
     self.send_header("Cache-Control", "no-cache")
     self.send_header("X-Accel-Buffering", "no")
     self.end_headers()
+    _reply_box = {"text": ""}  # server 端累积回复全文（用于历史持久化）
     def emit(ev):
+        t = ev.get("type")
+        if t in ("text", "final") and ev.get("text"):
+            _reply_box["text"] = ev["text"]
         try:
             self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
             self.wfile.flush()
@@ -2634,13 +2729,13 @@ def _handle_dsh_chat(self, project=None):
         _dsh_locks = _DSH_LOCKS
     lock = _dsh_locks.setdefault(project + ":" + agent_id, _th.Lock())
     with lock:
-        ok, new_sid, usage = _dsh_run(project, agent_id, message, session_id, emit)
+        ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit)
         _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
         if not ok and session_id:
             # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
             import time as _time
             _time.sleep(3)
-            ok2, new_sid2, usage2 = _dsh_run(project, agent_id, message, session_id, emit)
+            ok2, new_sid2, usage2 = _dsh_run(project, agent_id, dsh_input, session_id, emit)
             _dsh_log("占用重试: ok=%s sid=%s" % (ok2, new_sid2))
             if not ok2:
                 ok3, new_sid3, usage3 = _dsh_run(project, agent_id, message, "", emit)
@@ -2663,6 +2758,13 @@ def _handle_dsh_chat(self, project=None):
                                              + member_cfg["usage"].get("outputTokens", 0))
         member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         _dsh_save_member_cfg(project, agent_id, member_cfg)
+    # v2.17：成功回复落盘（assistant + usage）
+    if ok and _reply_box["text"]:
+        _dsh_append_history(project, agent_id, [{
+            "role": "assistant", "content": _reply_box["text"],
+            "usage": {k: usage.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadTokens", "totalTokens")},
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        }])
     emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
           "usage": usage, "total_usage": member_cfg.get("usage", {})})
 
@@ -2707,6 +2809,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 模型配置（v2.15.2）
         if parsed.path == "/api/dsh/model":
             _handle_dsh_model(self, project)
+            return
+
+        # API: 终端 Agent 聊天历史（v2.17）
+        if parsed.path == "/api/dsh/history":
+            _handle_dsh_history(self, project)
             return
 
         # API: 获取看板数据
@@ -2805,6 +2912,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         """处理 POST 请求"""
         parsed = urlparse(self.path)
         project = self._get_project()
+
+        # API: 终端 Agent 会话清空（v2.17）
+        if parsed.path == "/api/dsh/history/clear":
+            _handle_dsh_history_clear(self, project)
+            return
 
         # API: 终端 Agent 会话（v2.15 进程托管）
         if parsed.path == "/api/dsh/chat":

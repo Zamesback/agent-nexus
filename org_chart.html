@@ -320,6 +320,9 @@
     display: none; align-items: center; justify-content: center; z-index: 100;
   }
   .modal-mask.show { display: flex; }
+  .modal-mask.fullscreen { align-items: stretch; justify-content: stretch; padding: 0; }
+  .modal-mask.fullscreen .modal { width: 100%; max-width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; border: none; }
+  .modal-mask.fullscreen .chat-box, .modal-mask.fullscreen .chat-box.dsh-box { flex: 1; min-height: 0; }
   .modal {
     width: 560px; max-height: 82vh; overflow-y: auto;
     background: var(--panel);
@@ -1078,6 +1081,7 @@ function openPerson(agentId) {
           ${agentId !== 'user' ? `<span class="entry-badge ${esc(a.entry_type || 'manual')}">${entryTypeText(a)}</span>` : ''}
         </div>
       </div>
+      <button class="modal-close" onclick="togglePersonFullscreen()" title="全屏 / 恢复">⛶</button>
       <button class="modal-close" onclick="closePerson()">✕</button>
     </div>
     ${agentId === 'user' ? '' : `
@@ -1144,6 +1148,7 @@ function openPerson(agentId) {
   document.getElementById('personModal').classList.add('show');
   const msel = document.getElementById('dshModelSelect');
   if (msel) loadDshModel(msel);
+  if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史
 }
 function closePerson() { document.getElementById('personModal').classList.remove('show'); }
 
@@ -1237,28 +1242,59 @@ function isTerminalAgent(a) {
   return a && (a.id === 'terminal' || (a.role || '').includes('终端') || a.entry_type === 'dsh' || (a.entry && a.entry.type === 'dsh'));
 }
 let currentDshAgent = '';  // 当前打开的终端托管成员 id（会话历史按成员隔离）
-function dshKey() { return 'agentnexus_dsh_' + (PROJECT || 'default') + '_' + (currentDshAgent || 'terminal'); }
-function dshHistory() { try { return JSON.parse(localStorage.getItem(dshKey()) || '[]'); } catch (e) { return []; } }
-function dshTotalTokens() {
-  let n = 0;
-  dshHistory().forEach(m => { if (m.usage) n += (m.usage.totalTokens || 0); });
-  return n;
-}
+let dshMsgsCache = [];      // v2.17：聊天历史缓存（打开卡片时从服务端加载，发送/回复时内存追加）
+let dshServerUsage = {};   // 服务端累计用量（project_config dsh.members.<id>.usage）
+function dshHistory() { return dshMsgsCache; }
+function dshTotalTokens() { return dshServerUsage.totalTokens || 0; }
 function fmtTokens(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+async function loadDshHistory() {
+  // v2.17：从项目目录持久化文件加载该成员聊天历史（跨浏览器/设备可追溯）
+  const box = document.getElementById('dshMsgs');
+  const usageEl = document.getElementById('dshUsage');
+  if (!box) return;
+  try {
+    const resp = await fetch('/api/dsh/history' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'));
+    const j = await resp.json();
+    if (!j.ok) throw new Error(j.error || '加载失败');
+    dshServerUsage = j.total_usage || {};
+    dshMsgsCache = j.history || [];
+    const h = dshMsgsCache.slice(-30);
+    box.innerHTML = h.length ? h.map(m => {
+      const cls = m.role === 'user' ? 'user' : (m.role === 'thinking' ? 'thinking' : 'assistant');
+      const who = m.role === 'user' ? '你' : '终端 Agent';
+      return `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(m.content || '')}</div>`;
+    }).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
+    if (usageEl) usageEl.textContent = '用量：' + fmtTokens(dshTotalTokens());
+  } catch (e) {
+    box.innerHTML = '<div class="work-empty" style="padding:10px 0;">历史加载失败：' + esc2(e.message) + '</div>';
+  }
+}
+function togglePersonFullscreen() {
+  const m = document.getElementById('personModal');
+  if (m) m.classList.toggle('fullscreen');
+}
 function esc2(x) { return String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function renderDshHistory() {
+  // v2.17：打开卡片时由 loadDshHistory() 从服务端加载；此函数仅用于同步兜底
   const h = dshHistory().slice(-30);
   if (!h.length) return '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
   return h.map(m => {
     const cls = m.role === 'user' ? 'user' : (m.role === 'thinking' ? 'thinking' : 'assistant');
     const who = m.role === 'user' ? '你' : '终端 Agent';
-    return `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(m.content)}</div>`;
+    return `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(m.content || '')}</div>`;
   }).join('');
 }
-function clearDshHistory() {
-  localStorage.removeItem(dshKey());
-  document.getElementById('dshMsgs').innerHTML = '<div class="work-empty" style="padding:10px 0;">会话已清空 —— 下一轮消息将从新上下文开始。</div>';
-  document.getElementById('dshUsage').textContent = '用量：0';
+async function clearDshHistory() {
+  if (!confirm('确定清空该成员的会话？历史记录与 Agent 记忆都会归零。')) return;
+  try {
+    const resp = await fetch('/api/dsh/history/clear' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'), { method: 'POST' });
+    const j = await resp.json();
+    if (!j.ok) throw new Error(j.error || '清空失败');
+    dshMsgsCache = [];
+    dshServerUsage = {};
+    document.getElementById('dshMsgs').innerHTML = '<div class="work-empty" style="padding:10px 0;">会话已清空 —— 下一轮消息将从新上下文开始。</div>';
+    document.getElementById('dshUsage').textContent = '用量：0';
+  } catch (e) { alert('清空失败：' + e.message); }
 }
 function dshAppend(role, content) {
   const box = document.getElementById('dshMsgs');
@@ -1301,10 +1337,11 @@ async function sendToTerminal() {
   if (!text) return;
   input.value = '';
   dshAppend('user', text);
+  dshMsgsCache.push({ role: 'user', content: text });  // v2.17：用户消息进缓存（服务端已同步落盘）
   btn.disabled = true; btn.textContent = '回复中…';
   const h = dshHistory();
-  const histCtx = h.slice(-4).map(m => (m.role === 'user' ? '你' : '终端 Agent') + '：' + m.content).join('\n');
-  const payload = { message: histCtx ? (histCtx + '\n\n【现在的新消息】' + text) : text, session_id: '' };
+  const histCtx = h.slice(-4).map(m => (m.role === 'user' ? '你' : '终端 Agent') + '：' + (m.content || '')).join('\n');
+  const payload = { message: text, context: histCtx || '', session_id: '' };  // v2.17：纯消息落盘，上下文独立传
   try {
     const resp = await fetch('/api/dsh/chat' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
@@ -1356,9 +1393,8 @@ async function sendToTerminal() {
         if (t === 'dsh_done') {
           const usage = ev.usage || {};
           const total = ev.total_usage || {};
-          const h2 = dshHistory();
-          h2.push({ role: 'assistant', content: replyContent, usage: { inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0, totalTokens: usage.totalTokens || 0 } });
-          localStorage.setItem(dshKey(), JSON.stringify(h2));
+          dshMsgsCache.push({ role: 'assistant', content: replyContent, usage: { inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0, totalTokens: usage.totalTokens || 0 } });
+          dshServerUsage = total;  // v2.17：用量以服务端为准
           const box = document.getElementById('dshMsgs');
           if (box && box.lastElementChild) {
             box.lastElementChild.insertAdjacentHTML('beforeend', `<div class="dsh-usage">⟐ in ${fmtTokens(usage.inputTokens || 0)} / out ${fmtTokens(usage.outputTokens || 0)} / 累计 ${fmtTokens(total.totalTokens || 0)}</div>`);
@@ -1371,7 +1407,6 @@ async function sendToTerminal() {
     dshAppend('assistant', '⚠️ 连接中断：' + e.message);
   } finally {
     btn.disabled = false; btn.textContent = '发送';
-    localStorage.setItem(dshKey(), JSON.stringify(dshHistory()));
   }
 }
 

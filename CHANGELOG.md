@@ -1,4 +1,12 @@
-## v2.16.1 — Remove the work/rest broadcast switcher
+## v2.17 — Chat history persistence + fullscreen member card
+
+- **Chat history is now real**: per-member terminal chats persist to `<PROJECTS_ROOT>/<project>/dsh_chat/<agent>.json` — the user message is written immediately when the request arrives (so a question is never lost, even if the run fails or the page refreshes), and the assistant reply plus token usage is appended on success. 600-message cap, atomic writes (tmp + rename). History follows the project folder, so it survives browser refreshes, cache clears, and works across browsers/devices.
+- **New APIs**: `GET /api/dsh/history?project=X&agent=<id>` returns the persisted history plus the member's cumulative usage; `POST /api/dsh/history/clear` wipes the history file, the member's session_id and usage — so clearing the chat also resets the agent's memory (fixes the old split where the frontend cleared localStorage but the process memory stayed).
+- **Frontend loads from the server**: the member chat panel renders history from the backend on open; the「清空会话」button calls the backend; the usage readout uses server-side totals instead of localStorage.
+- **Message vs context separated**: the chatbox sends the raw message and the recent-history context as separate fields, so the persisted history stays clean and never snowballs.
+- **Fullscreen member card**: the person modal gains a fullscreen toggle (⛶) so long terminal chats get the whole screen.
+
+## v2.16.1 — Remove the work/rest broadcast switcher — Remove the work/rest broadcast switcher
 
 - Dropped the「开工/收工 + 豁免」broadcast UI (top-bar button, modal, related JS) from both the org view and the kanban view — it didn't hold up in daily use.
 - Server-side `/api/protocol` state and the agent-prompt protocol paragraphs are intentionally kept: agents still follow the working/rest protocol (30-min polling while working, dormant when off), so nothing about agent behavior changes.
