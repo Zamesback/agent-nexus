@@ -2279,7 +2279,7 @@ def _dsh_log(msg):
     except Exception:
         pass
 
-DSH_MODEL_WHITELIST = {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash",
+DSH_MODEL_WHITELIST = {"space-bunny-free", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash",
                        "deepseek-v4-flash-vision", "deepseek-v4-flash-vision-experience"}
 
 def _dsh_config_path(project):

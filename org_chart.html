@@ -324,6 +324,15 @@
     box-shadow: 0 20px 60px rgba(0,0,0,.5);
   }
   .modal-ops { display: flex; gap: 8px; margin: 4px 0 2px; flex-wrap: wrap; }
+  #personCard { width: 920px; max-width: 94vw; }
+  .person-body { display: flex; align-items: stretch; }
+  .person-left { flex: 0 0 340px; max-width: 340px; border-right: 1px solid var(--line); max-height: 58vh; overflow-y: auto; }
+  .person-left .modal-sec { padding: 14px 18px; }
+  .person-right { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 56vh; max-height: 56vh; overflow: hidden; }
+  .person-right .modal-sec { flex: 1; display: flex; flex-direction: column; padding: 14px 20px; border-bottom: none; overflow: hidden; }
+  .person-right .chat-list { flex: 1; max-height: none; min-height: 0; overflow-y: auto; }
+  .person-right .dsh-msgs { flex: 1; max-height: none; min-height: 0; }
+  .person-right .chat-box.dsh-box { flex: 1; min-height: 0; }
   .btn.mini { padding: 4px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
   .btn.mini:hover { border-color: var(--accent); }
   .btn.mini.danger { color: var(--accent); border-color: var(--accent); }
@@ -411,7 +420,7 @@
   /* ===== 终端会话（dsh 进程托管）===== */
   .dsh-status { font-size: 11px; font-family: var(--mono); color: var(--dim-2); margin: 6px 0 2px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .dsh-status .ok { color: #3fb950; }
-  .dsh-msgs { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 2px; }
+  .dsh-msgs { max-height: none; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 2px; }
   .dsh-msg { max-width: 88%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
   .dsh-msg.user { align-self: flex-end; background: #444; color: #fff; }
   .dsh-msg.assistant { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
@@ -1100,6 +1109,8 @@ function openPerson(agentId) {
       <button class="btn mini danger" onclick="removeAgent('${esc(a.id)}')">移除成员</button>
       <span style="font-size:11px;color:var(--dim-2);margin-left:auto;font-family:var(--mono);">拖动节点可自由排布</span>
     </div>`}
+    <div class="person-body">
+    <div class="person-left">
     <div class="modal-sec">
       <div class="modal-sec-title">当前工作 · ${working.length}</div>
       ${working.length ? working.map(t => `
@@ -1122,6 +1133,8 @@ function openPerson(agentId) {
         <span style="font-size:11px;color:var(--dim-2);font-family:var(--mono);">改完立即生效</span>
       </div>
     </div>
+    </div>
+    <div class="person-right">
     <div class="modal-sec">
       <div class="modal-sec-title">对话 · ${messages.length}</div>
       <div class="chat-list" id="chatList">
@@ -1129,9 +1142,9 @@ function openPerson(agentId) {
           <div class="chat-item"><span class="who">${esc(whoName(m.sender))}</span><span class="time">${fmtTime(m.timestamp)}</span><br>${esc((m.content || '').slice(0, 120))}</div>`).join('') || '<div class="work-empty">还没有对话</div>'}
       </div>
       ${isTerminalAgent(a) ? `
-      <div class="chat-box" style="flex-direction:column;gap:0;align-items:stretch;">
+      <div class="chat-box dsh-box" style="flex-direction:column;gap:0;align-items:stretch;">
         <div class="dsh-status">
-          <span class="ok">● 进程托管在线</span><span class="dim">模型：DeepSeek Flash（锁定）</span>
+          <span class="ok">● 进程托管在线</span><span class="dim">模型：Space Bunny（锁定）</span>
           <span class="dim" id="dshUsage">用量：${fmtTokens(dshTotalTokens())}</span>
           <button class="btn mini" onclick="clearDshHistory()" style="margin-left:auto;padding:2px 8px;font-size:11px;">清空会话</button>
         </div>
@@ -1146,6 +1159,8 @@ function openPerson(agentId) {
         <input id="chatInput" placeholder="给 ${esc(a.name || a.id)} 留言…" onkeydown="if(event.key==='Enter')sendMsgTo('${esc(a.id)}')">
         <button class="btn primary" onclick="sendMsgTo('${esc(a.id)}')">发送</button>
       </div>`}
+    </div>
+    </div>
     </div>`;
   document.getElementById('personModal').classList.add('show');
 }

@@ -1,3 +1,9 @@
+## v2.15.1 — Space Bunny model + org card side-by-side layout
+
+- **Model switch**: terminal agent (dsh) now runs **Space Bunny** (`opencode-go-extra/space-bunny-free`, OpenCode Go quota, limited-time free) per user request; DeepSeek Flash kept in server whitelist as fallback. Lock enforced at profile + CLI `--patch` overlay + server whitelist (3 layers).
+- **Org card layout**: person card widened to 920px with **side-by-side layout** — left column (current work / recent deliveries / reporting line), right column (chat history + real-time terminal chatbox). Chat area flex chain fixed so the message list scrolls internally and the input box stays pinned.
+- dsh status bar shows the actual locked model name.
+
 ## v2.15 — Terminal Agent Process Hosting (dsh)
 
 **New: fifth access mode — terminal agent process hosting.** The board now launches a DeepSeek Harness (dsh) agent process on the user's machine and serves it through a real-time chatbox in the org view, while the JSON board remains the single source of truth.
