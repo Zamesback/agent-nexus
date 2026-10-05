@@ -1,3 +1,8 @@
+## v2.16.1 — Remove the work/rest broadcast switcher
+
+- Dropped the「开工/收工 + 豁免」broadcast UI (top-bar button, modal, related JS) from both the org view and the kanban view — it didn't hold up in daily use.
+- Server-side `/api/protocol` state and the agent-prompt protocol paragraphs are intentionally kept: agents still follow the working/rest protocol (30-min polling while working, dormant when off), so nothing about agent behavior changes.
+
 ## v2.16 — Terminal hosting as a first-class invite mode
 
 - **New invite mode「终端托管」(dsh)**: the person-invite panel now has a 5th option — terminal hosting. Picking it registers a member with `entry.type=dsh` and **immediately generates a member-specific dsh profile** (`~/.dsh/profiles/dsh-<project>-<agent>/cordis.patch.yml`, cloned from the template with identity/reporting/protocol replaced per member — project name, agent ID, name, role, and `agentnexus` flags).
