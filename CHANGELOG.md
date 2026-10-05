@@ -1,3 +1,12 @@
+## v2.16 — Terminal hosting as a first-class invite mode
+
+- **New invite mode「终端托管」(dsh)**: the person-invite panel now has a 5th option — terminal hosting. Picking it registers a member with `entry.type=dsh` and **immediately generates a member-specific dsh profile** (`~/.dsh/profiles/dsh-<project>-<agent>/cordis.patch.yml`, cloned from the template with identity/reporting/protocol replaced per member — project name, agent ID, name, role, and `agentnexus` flags).
+- **Per-member process hosting**: `/api/dsh/chat?project=X&agent=<id>` now resolves the member on the board (must be terminal-hosted / legacy `terminal` / role containing「终端」), runs dsh with that member's profile, and validates the model against the member profile's whitelist. Unknown or non-terminal members are rejected with clear errors.
+- **Per-member sessions & usage**: `project_config.json` now keeps `dsh.members.<agent_id> = {session_id, usage, last_ts}`; legacy `terminal` data in the old `dsh` root key is read as a fallback (v2.15 migration-compatible). Model switching resets every member's session so the next message picks up the new model.
+- **Profile rebuild on rename**: renaming or re-roling a terminal-hosted member deletes and regenerates its profile (identity text stays in sync).
+- **Org UI**: invite modal shows 5 modes; terminal-hosted cards expose the chat panel via `entry.type === 'dsh'` (not just the legacy `terminal` id); chat history is isolated per member (`currentDshAgent`), and the chatbox posts `&agent=<id>`.
+- Verified end to end: invite → profile generation → member validation → real dsh reply (network recovered) → usage persisted.
+
 ## v2.15.2 — Per-project model selector + org canvas zoom
 
 - **Per-project model choice**: the dsh terminal agent's model is now a **project-level option** instead of being hard-wired. `GET/POST /api/dsh/model?project=<name>` validates against a server whitelist (Space Bunny free / DeepSeek V4 Flash / V4.1 Flash / V4 Flash Vision / Vision Experience) and persists to `project_config.json`; switching models resets the dsh session so the next message takes effect.

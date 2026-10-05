@@ -499,6 +499,7 @@
           <div class="mode-chip active" data-mode="guide" onclick="pickMode('guide')"><span>引导词接入</span><small>生成身份引导文案，复制到目标 Agent 粘贴激活</small></div>
           <div class="mode-chip" data-mode="api" onclick="pickMode('api')"><span>API 接入</span><small>HTTP 接口，适合有开发能力的 Agent</small></div>
           <div class="mode-chip" data-mode="cli" onclick="pickMode('cli')"><span>CLI 接入</span><small>agentnexus 命令行，适合本地终端 Agent</small></div>
+          <div class="mode-chip" data-mode="dsh" onclick="pickMode('dsh')"><span>终端托管</span><small>进程托管：工具自动拉起终端 Agent，卡片直接对话</small></div>
           <div class="mode-chip" data-mode="manual" onclick="pickMode('manual')"><span>仅添加身份</span><small>先占位，稍后再接入</small></div>
         </div>
         <div class="invite-target" id="inviteTargetRow" style="display:none;">
@@ -1132,6 +1133,7 @@ function renderSide() {
 function openPerson(agentId) {
   const a = agentById[agentId];
   if (!a) return;
+  currentDshAgent = isTerminalAgent(a) ? agentId : '';
   const st = agentStatus(agentId);
   const color = a.color || colorForAgent(agentId);
   const tasks = tasksOf(agentId);
@@ -1145,7 +1147,7 @@ function openPerson(agentId) {
     .join('');
   const whoName = (id) => { const x = agentById[id]; return x ? (x.name || id) : id; };
   const entryTypeText = (x) => {
-    const t = x.entry_type || (x.entry && x.entry.type === 'http' ? 'api' : (x.entry && x.entry.target === '引导词接入' ? 'guide' : (x.entry && x.entry.type === 'cli' ? 'cli' : 'manual')));
+    const t = x.entry_type || (x.entry && x.entry.type === 'http' ? 'api' : (x.entry && x.entry.target === '引导词接入' ? 'guide' : (x.entry && x.entry.type === 'cli' ? 'cli' : (x.entry && x.entry.type === 'dsh' ? 'dsh' : 'manual'))));
     return ({ guide: '引导词', api: 'API', cli: 'CLI', manual: '仅身份' })[t] || '仅身份';
   };
   document.getElementById('personCard').innerHTML = `
@@ -1313,9 +1315,10 @@ async function sendMsgTo(agentId) {
 
 /* ===== 终端会话（v2.15 dsh 进程托管）===== */
 function isTerminalAgent(a) {
-  return a && (a.id === 'terminal' || (a.role || '').includes('终端') || a.entry_type === 'dsh');
+  return a && (a.id === 'terminal' || (a.role || '').includes('终端') || a.entry_type === 'dsh' || (a.entry && a.entry.type === 'dsh'));
 }
-function dshKey() { return 'agentnexus_dsh_' + (PROJECT || 'default'); }
+let currentDshAgent = '';  // 当前打开的终端托管成员 id（会话历史按成员隔离）
+function dshKey() { return 'agentnexus_dsh_' + (PROJECT || 'default') + '_' + (currentDshAgent || 'terminal'); }
 function dshHistory() { try { return JSON.parse(localStorage.getItem(dshKey()) || '[]'); } catch (e) { return []; } }
 function dshTotalTokens() {
   let n = 0;
@@ -1384,7 +1387,7 @@ async function sendToTerminal() {
   const histCtx = h.slice(-4).map(m => (m.role === 'user' ? '你' : '终端 Agent') + '：' + m.content).join('\n');
   const payload = { message: histCtx ? (histCtx + '\n\n【现在的新消息】' + text) : text, session_id: '' };
   try {
-    const resp = await fetch('/api/dsh/chat' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+    const resp = await fetch('/api/dsh/chat' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
     });
     if (!resp.ok) {
@@ -1489,11 +1492,12 @@ function copyInvite() {
   navigator.clipboard.writeText(t.value).then(() => alert('已复制，去目标 Agent 粘贴吧')).catch(() => alert('复制失败，请手动选择复制'));
 }
 function showInvite(name, mode, text) {
-  const titles = { guide: `引导词 · ${name}`, api: `API 接入信息 · ${name}`, cli: `CLI 接入命令 · ${name}`, manual: `接入配置 · ${name}` };
+  const titles = { guide: `引导词 · ${name}`, api: `API 接入信息 · ${name}`, cli: `CLI 接入命令 · ${name}`, dsh: `终端托管 · ${name}`, manual: `接入配置 · ${name}` };
   const tips = {
     guide: '把这整段文案复制，粘贴到目标 Agent（如豆包工作）的对话里，它会以此确认自己的身份并开始工作。',
     api: '这是目标 Agent 需要的接口信息。把整段内容给接入方，对方按此轮询/调用看板。',
     cli: '在目标机器终端执行 agentnexus onboard 完成接入（本机已安装则直接可用）。',
+    dsh: '不用复制粘贴：工具已在本机拉起终端 Agent 进程，直接点开这张卡片右下角对话框对话即可。',
     manual: ''
   };
   document.getElementById('inviteTitle').textContent = titles[mode] || titles.guide;

@@ -908,12 +908,13 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
       - guide: 引导词接入（生成引导文案，用户复制到目标 Agent 粘贴激活）
       - api:   HTTP API 接入（entry.target 为接口地址/轮询地址）
       - cli:   CLI 接入（tools/agentnexus）
+      - dsh:   终端托管（进程托管：工具自动在本机拉起终端 Agent 进程，直接在组织视图卡片对话）
       - manual: 仅添加身份（原「加位子」行为，不产生接入配置）
     返回 (success, message, guide)
     """
     entry_type = (entry_type or "manual").strip().lower()
-    if entry_type not in ("guide", "api", "cli", "manual"):
-        return False, "entry_type 必须是 guide/api/cli/manual", ""
+    if entry_type not in ("guide", "api", "cli", "dsh", "manual"):
+        return False, "entry_type 必须是 guide/api/cli/dsh/manual", ""
     if entry_type == "api":
         entry = {"type": "http", "target": (entry_target or "").strip() or "http://localhost:8766"}
         guide = f"""Agent 接入信息（API 模式）
@@ -943,6 +944,15 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
   agentnexus conclude --project "{project}" --title "决策标题" --decision "内容"
 
 轮询对齐：按上方【协作协议·工作态/收工态】执行——工作态下每 30 分钟用 agentnexus status 检查 @ 消息与任务指派；收工态停止主动检查。"""
+    elif entry_type == "dsh":
+        entry = {"type": "dsh", "target": "进程托管（本机 dsh）"}
+        guide = f"""Agent 接入信息（终端托管 · 进程托管模式）
+项目：{project}    身份：{name}（{role or '成员'}）    id：{agent_id}
+
+你不用复制粘贴任何东西：本工具会在你本机直接拉起终端 Agent（dsh）进程，自动生成专属身份配置。
+接入后到组织视图点开这个人的卡片，右下角对话框直接发指令，Agent 会实时回复并操作看板（认领任务 / 更新状态 / 发消息 / 沉淀决策）。
+
+协作协议见【协作协议·工作态/收工态】——工作态下每 30 分钟检查 @ 消息与任务指派；收工态停止主动检查。"""
     elif entry_type == "manual":
         entry = {"type": "session", "target": "组织图手动添加"}
         guide = ""
@@ -954,6 +964,9 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
     success, message = register_agent(project, agent_id, entry, name=name, role=role)
     if not success:
         return False, message, ""
+    if entry_type == "dsh":
+        # 进程托管：立即生成成员专属 dsh profile（身份/协作协议替换自模板）
+        _dsh_ensure_profile(project, agent_id, name, role)
     # 把引导词存进 agent 记录（board + config）
     try:
         board = load_board(project)
@@ -1007,6 +1020,17 @@ def update_agent_profile(project, agent_id, name=None, role=None):
             "type": "system"
         })
     save_board(board, project)
+    # v2.16：终端托管成员改名/改身份后重建专属 profile（删除旧目录重新生成）
+    entry_t = (found.get("entry") or {}).get("type", "")
+    if changed and (entry_t == "dsh" or agent_id == "terminal"):
+        import shutil as _sh2, os as _os2
+        prof_dir = _dsh_member_profile_dir(project, agent_id)
+        if _os2.path.isdir(prof_dir):
+            try:
+                _sh2.rmtree(prof_dir)
+            except Exception:
+                pass
+        _dsh_ensure_profile(project, agent_id, found.get("name"), found.get("role"))
     # 同步 config
     try:
         cfg = load_config(project)
@@ -2292,6 +2316,86 @@ DSH_MODEL_LABELS = {
     "deepseek-v4-flash-vision-experience": "DeepSeek V4 Flash Vision Experience",
 }
 
+
+DSH_PROFILE_TEMPLATE = "sanguo-dsh"   # profile 模板：providers/模型/协议段复制自此，身份段按成员替换
+
+def _dsh_safe(s):
+    """目录安全化：非字母数字转下划线"""
+    return re.sub(r"[^\w\-]", "_", str(s or "default"))
+
+def _dsh_member_profile_dir(project, agent_id):
+    """成员专属 profile 目录：~/.dsh/profiles/dsh-<project>-<agent>/"""
+    import os as _os
+    name = "dsh-" + _dsh_safe(project) + "-" + _dsh_safe(agent_id)
+    return _os.path.expanduser("~/.dsh/profiles/" + name)
+
+def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
+    """为托管成员生成专属 dsh profile（模板复制 + 身份段替换）。
+    目录已存在则直接返回（成员改名时由 update_agent_profile 触发重建）。"""
+    import os as _os, shutil as _sh
+    tpl_dir = _os.path.expanduser("~/.dsh/profiles/" + DSH_PROFILE_TEMPLATE)
+    tpl_patch = _os.path.join(tpl_dir, "cordis.patch.yml")
+    if not _os.path.isfile(tpl_patch):
+        _dsh_log("profile 模板缺失: %s" % tpl_patch)
+        return None
+    tgt_dir = _dsh_member_profile_dir(project, agent_id)
+    tgt_patch = _os.path.join(tgt_dir, "cordis.patch.yml")
+    if _os.path.isfile(tgt_patch):
+        return tgt_dir  # 已生成过
+    try:
+        _os.makedirs(tgt_dir, exist_ok=True)
+        # 复制模板全部文件（cordis.patch.yml / cordis.yml / package.json 等）
+        for fn in _os.listdir(tpl_dir):
+            src = _os.path.join(tpl_dir, fn)
+            if _os.path.isfile(src):
+                _sh.copy2(src, _os.path.join(tgt_dir, fn))
+        body = open(tgt_patch, encoding="utf-8").read()
+        name = agent_name or agent_id
+        role = agent_role or "终端执行 Agent"
+        body = body.replace(
+            "你是「三国指挥官」项目班子的一名成员——终端执行 Agent，身份 ID：terminal，汇报给 Zames（项目主导方）。",
+            "你是「%s」项目班子的一名成员——终端执行 Agent「%s」（身份 ID：%s，身份：%s），汇报给 Zames（项目主导方）。" % (project, name, agent_id, role)
+        )
+        body = body.replace('--project "三国指挥官"', '--project "%s"' % project)
+        body = body.replace("--name terminal", "--name %s" % agent_id)
+        open(tgt_patch, "w", encoding="utf-8").write(body)
+        _dsh_log("生成成员 profile: %s" % tgt_dir)
+        return tgt_dir
+    except Exception as e:
+        _dsh_log("生成成员 profile 失败 %s: %s" % (tgt_dir, e))
+        return None
+
+def _dsh_profile_name(project, agent_id):
+    """返回 --profile 使用的 profile 名（目录名）"""
+    d = _dsh_member_profile_dir(project, agent_id)
+    return "dsh-" + _dsh_safe(project) + "-" + _dsh_safe(agent_id) if d else DSH_PROFILE_TEMPLATE
+
+def _dsh_member_cfg(project, agent_id):
+    """读成员会话配置（project_config.json dsh.members.<agent_id>；terminal 兼容回退 dsh 根键）"""
+    cfg = _dsh_load_cfg(project)
+    dsh = cfg.get("dsh") or {}
+    members = dsh.get("members") or {}
+    if agent_id in members and isinstance(members[agent_id], dict):
+        return members[agent_id]
+    if agent_id == "terminal":
+        # 兼容 v2.15：三国 terminal 的会话曾存 dsh 根键
+        legacy = {k: v for k, v in dsh.items() if k != "members" and k != "model"}
+        if legacy:
+            return legacy
+    return {}
+
+def _dsh_save_member_cfg(project, agent_id, member):
+    """写成员会话配置；terminal 写 members.terminal（新机制）"""
+    cfg = _dsh_load_cfg(project)
+    dsh = cfg.get("dsh") or {}
+    members = dsh.get("members")
+    if not isinstance(members, dict):
+        members = {}
+    members[agent_id] = member
+    dsh["members"] = members
+    cfg["dsh"] = dsh
+    _dsh_save_cfg(project, cfg)
+
 def _dsh_lock_patch(project):
     """按项目动态生成模型锁 overlay（CLI --patch 最高优先级）。
     读 project_config.json 的 dsh.model；不在白名单则回退默认。"""
@@ -2339,11 +2443,11 @@ def _dsh_save_cfg(project, cfg):
     except Exception:
         pass
 
-def _dsh_verify_model():
+def _dsh_verify_model(profile_name=DSH_PROFILE):
     """启动前校验 profile 锁定的模型在白名单内（防误选昂贵模型）"""
     try:
         import subprocess as _sp
-        out = _sp.run([DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--dump-config"],
+        out = _sp.run([DSH_NODE, DSH_CLI, "--profile", profile_name, "--dump-config"],
                       capture_output=True, text=True, timeout=30)
         cfg = out.stdout or ""
         model = None
@@ -2364,11 +2468,23 @@ def _dsh_verify_model():
     except Exception as e:
         return False, f"模型校验异常：{e}"
 
-def _dsh_run(project, message, session_id, emit):
-    """拉起 dsh headless 进程，流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
+def _dsh_run(project, agent_id, message, session_id, emit):
+    """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
     import subprocess as _sp
     _lock_patch = _dsh_lock_patch(project)
-    cmd = [DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--patch", _lock_patch, "--json"]
+    # 按成员定位 profile（模板复制 + 身份替换）；失败回退模板 profile
+    board = load_board(project)
+    member = None
+    for a in (board or {}).get("agents", []) or []:
+        if a.get("id") == agent_id:
+            member = a
+            break
+    prof_dir = None
+    if member:
+        prof_dir = _dsh_ensure_profile(project, agent_id,
+                                       member.get("name"), member.get("role"))
+    prof_name = _dsh_profile_name(project, agent_id) if prof_dir else DSH_PROFILE_TEMPLATE
+    cmd = [DSH_NODE, DSH_CLI, "--profile", prof_name, "--patch", _lock_patch, "--json"]
     if session_id:
         cmd += ["--session-id", session_id]
     cmd.append(message)
@@ -2433,6 +2549,10 @@ def _handle_dsh_model(self, project=None):
         dsh_cfg["model"] = model
         if old != model:
             dsh_cfg["session_id"] = ""  # 模型变了：下次起新会话，确保新模型生效
+            members = dsh_cfg.get("members") or {}
+            for _mid in members:
+                if isinstance(members[_mid], dict):
+                    members[_mid]["session_id"] = ""
         cfg["dsh"] = dsh_cfg
         _dsh_save_cfg(project, cfg)
         _dsh_log("模型切换 project=%s %s -> %s" % (project, old or "(default)", model))
@@ -2440,12 +2560,32 @@ def _handle_dsh_model(self, project=None):
                          "note": "已生效：下一次消息将使用新模型（会话已重置）"})
 
 def _handle_dsh_chat(self, project=None):
-    """POST /api/dsh/chat  SSE 流式：留言给终端 Agent，回复实时回传"""
+    """POST /api/dsh/chat  SSE 流式：留言给终端 Agent（按成员托管），回复实时回传"""
     import subprocess as _sp
-    _dsh_log("dsh/chat 进入: project=%s path=%s" % (project, self.path))
+    parsed = urlparse(self.path)
+    params = parse_qs(parsed.query)
+    agent_id = params.get("agent", [None])[0] or "terminal"
+    _dsh_log("dsh/chat 进入: project=%s agent=%s path=%s" % (project, agent_id, self.path))
     _dsh_log("DSH_NODE=%s DSH_CLI=%s" % (DSH_NODE, DSH_CLI))
-    # 1) 模型白名单校验
-    ok, msg = _dsh_verify_model()
+    # 0) 成员校验：看板存在该成员（dsh 托管 / terminal 兼容 / role 含「终端」）
+    board0 = load_board(project)
+    member = None
+    for a in (board0 or {}).get("agents", []) or []:
+        if a.get("id") == agent_id:
+            member = a
+            break
+    if not member:
+        self._send_json({"ok": False, "error": "看板中不存在成员 %s，请先在组织视图拉入「终端托管」成员。" % agent_id}, status=400)
+        return
+    entry_t = (member.get("entry") or {}).get("type", "")
+    is_terminal_member = (agent_id == "terminal") or (entry_t == "dsh") or ("终端" in (member.get("role") or ""))
+    if not is_terminal_member:
+        self._send_json({"ok": False, "error": "成员 %s 不是终端托管成员（entry.type=%s），无法进行进程托管对话。" % (agent_id, entry_t or "无")}, status=400)
+        return
+    # 1) 成员 profile（模板复制+身份替换）→ 模型白名单校验
+    prof_dir = _dsh_ensure_profile(project, agent_id, member.get("name"), member.get("role"))
+    prof_name = _dsh_profile_name(project, agent_id) if prof_dir else DSH_PROFILE_TEMPLATE
+    ok, msg = _dsh_verify_model(prof_name)
     _dsh_log("verify: ok=%s %s" % (ok, msg))
     if not ok:
         self._send_json({"ok": False, "error": msg}, status=403)
@@ -2469,11 +2609,10 @@ def _handle_dsh_chat(self, project=None):
     if not message:
         self._send_json({"ok": False, "error": "message 不能为空"}, status=400)
         return
-    # 4) 复用/新会话
-    cfg = _dsh_load_cfg(project)
-    dsh_cfg = cfg.get("dsh") or {}
+    # 4) 复用/新会话（按成员）
+    member_cfg = _dsh_member_cfg(project, agent_id)
     if not session_id:
-        session_id = dsh_cfg.get("session_id") or ""
+        session_id = member_cfg.get("session_id") or ""
     # 5) SSE 流式响应
     _dsh_log("开始 SSE 响应")
     self.send_response(200)
@@ -2493,18 +2632,18 @@ def _handle_dsh_chat(self, project=None):
     if _dsh_locks is None:
         _DSH_LOCKS = {}
         _dsh_locks = _DSH_LOCKS
-    lock = _dsh_locks.setdefault(project, _th.Lock())
+    lock = _dsh_locks.setdefault(project + ":" + agent_id, _th.Lock())
     with lock:
-        ok, new_sid, usage = _dsh_run(project, message, session_id, emit)
+        ok, new_sid, usage = _dsh_run(project, agent_id, message, session_id, emit)
         _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
         if not ok and session_id:
             # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
             import time as _time
             _time.sleep(3)
-            ok2, new_sid2, usage2 = _dsh_run(project, message, session_id, emit)
+            ok2, new_sid2, usage2 = _dsh_run(project, agent_id, message, session_id, emit)
             _dsh_log("占用重试: ok=%s sid=%s" % (ok2, new_sid2))
             if not ok2:
-                ok3, new_sid3, usage3 = _dsh_run(project, message, "", emit)
+                ok3, new_sid3, usage3 = _dsh_run(project, agent_id, message, "", emit)
                 _dsh_log("换新会话: ok=%s sid=%s" % (ok3, new_sid3))
                 if ok3:
                     ok, new_sid, usage = True, new_sid3, usage3
@@ -2512,21 +2651,20 @@ def _handle_dsh_chat(self, project=None):
                 ok, new_sid, usage = True, new_sid2, usage2
     if not new_sid and ok:
         # 兜底：无 session 事件
-        new_sid = "session-" + project
-    # 6) 用量落盘
+        new_sid = "session-" + project + "-" + agent_id
+    # 6) 用量落盘（按成员）
     if ok:
-        dsh_cfg["session_id"] = new_sid
-        dsh_cfg.setdefault("usage", {}).setdefault("inputTokens", 0)
-        dsh_cfg["usage"]["inputTokens"] += usage.get("inputTokens", 0)
-        dsh_cfg["usage"]["outputTokens"] = dsh_cfg["usage"].get("outputTokens", 0) + usage.get("outputTokens", 0)
-        dsh_cfg["usage"]["cacheReadTokens"] = dsh_cfg["usage"].get("cacheReadTokens", 0) + usage.get("cacheReadTokens", 0)
-        dsh_cfg["usage"]["totalTokens"] = (dsh_cfg["usage"].get("inputTokens", 0)
-                                             + dsh_cfg["usage"].get("outputTokens", 0))
-        dsh_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        cfg["dsh"] = dsh_cfg
-        _dsh_save_cfg(project, cfg)
+        member_cfg["session_id"] = new_sid
+        member_cfg.setdefault("usage", {}).setdefault("inputTokens", 0)
+        member_cfg["usage"]["inputTokens"] += usage.get("inputTokens", 0)
+        member_cfg["usage"]["outputTokens"] = member_cfg["usage"].get("outputTokens", 0) + usage.get("outputTokens", 0)
+        member_cfg["usage"]["cacheReadTokens"] = member_cfg["usage"].get("cacheReadTokens", 0) + usage.get("cacheReadTokens", 0)
+        member_cfg["usage"]["totalTokens"] = (member_cfg["usage"].get("inputTokens", 0)
+                                             + member_cfg["usage"].get("outputTokens", 0))
+        member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        _dsh_save_member_cfg(project, agent_id, member_cfg)
     emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
-          "usage": usage, "total_usage": dsh_cfg.get("usage", {})})
+          "usage": usage, "total_usage": member_cfg.get("usage", {})})
 
 class CollabHandler(SimpleHTTPRequestHandler):
     """协作看板请求处理器"""
