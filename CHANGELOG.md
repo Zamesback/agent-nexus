@@ -1,3 +1,10 @@
+## v2.15.2 — Per-project model selector + org canvas zoom
+
+- **Per-project model choice**: the dsh terminal agent's model is now a **project-level option** instead of being hard-wired. `GET/POST /api/dsh/model?project=<name>` validates against a server whitelist (Space Bunny free / DeepSeek V4 Flash / V4.1 Flash / V4 Flash Vision / Vision Experience) and persists to `project_config.json`; switching models resets the dsh session so the next message takes effect.
+- **Dynamic model lock**: `_dsh_lock_patch(project)` generates a per-project `tools/<project>-model-lock.yml` overlay from the stored choice (falls back to default on invalid values); the dsh CLI receives it as its highest-priority `--patch`, so the running process always matches the project's selected model.
+- **Org canvas zoom**: zoom toolbar (− / % / + / fit) with ⌘/Ctrl + wheel zoom anchored at the cursor; zoom level persisted per project (localStorage); drag distances and layout are scaled correctly under zoom; zoom layer width/height follows `totalW/H * zoom`.
+- Org view dsh status bar adds a **model dropdown** (whitelist + Chinese labels, current value preselected; switch shows a confirmation note).
+
 ## v2.15.1 — Space Bunny model + org card side-by-side layout
 
 - **Model switch**: terminal agent (dsh) now runs **Space Bunny** (`opencode-go-extra/space-bunny-free`, OpenCode Go quota, limited-time free) per user request; DeepSeek Flash kept in server whitelist as fallback. Lock enforced at profile + CLI `--patch` overlay + server whitelist (3 layers).

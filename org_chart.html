@@ -179,6 +179,10 @@
   }
   #orgCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
   #nodeLayer { position: absolute; top: 0; left: 0; }
+  #zoomLayer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  .zoom-pct { font-size: 11px; font-family: var(--mono); color: var(--dim); min-width: 44px; text-align: center; user-select: none; }
+  .dsh-model-select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 2px 4px; max-width: 170px; outline: none; cursor: pointer; }
+  .dsh-model-select:focus { border-color: var(--accent); }
 
   /* ===== 节点卡片（悬浮岛）===== */
   .node {
@@ -448,6 +452,10 @@
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
       <button class="btn ghost" id="btn-layout" onclick="toggleLayout()" title="切换组织图布局方向（左右/上下）">⇄ 左右</button>
       <button class="btn ghost" id="btn-reset" onclick="resetLayout()" title="恢复自动布局">重置布局</button>
+      <button class="btn ghost" id="btn-zoom-out" onclick="zoomBy(-1)" title="缩小（⌘/Ctrl + 滚轮 也行）">−</button>
+      <span class="zoom-pct" id="zoomPct">100%</span>
+      <button class="btn ghost" id="btn-zoom-in" onclick="zoomBy(1)" title="放大（⌘/Ctrl + 滚轮 也行）">＋</button>
+      <button class="btn ghost" id="btn-zoom-fit" onclick="zoomFit()" title="适应窗口">适应</button>
       <button class="btn ghost" id="theme-toggle" onclick="toggleTheme()">A // 亮色</button>
     </div>
   </div>
@@ -458,8 +466,10 @@
       <div class="proj-list" id="projList"></div>
     </div>
     <div class="canvas-wrap" id="canvasWrap">
-      <svg id="orgCanvas"></svg>
-      <div id="nodeLayer"></div>
+      <div id="zoomLayer">
+        <svg id="orgCanvas"></svg>
+        <div id="nodeLayer"></div>
+      </div>
       <div class="empty-state" id="emptyState" style="display:none;">
         <div class="big">班子还没搭起来</div>
         用右上角「＋ 加位子」把人拉进来<br>
@@ -666,6 +676,51 @@ function agentStatus(agentId) {
   return { key: worst, label: STATUS_LABEL[worst] || worst, color: 'var(--accent)' };
 }
 
+/* ===== 画布缩放（v2.15.2） ===== */
+let ZOOM = 1, lastTotalW = 1200, lastTotalH = 800;
+try { ZOOM = parseFloat(localStorage.getItem('agentnexus_zoom_' + PROJECT)) || 1; } catch (e) {}
+function clampZoom(z) { return Math.max(0.15, Math.min(3, z)); }
+function applyZoom() {
+  const zl = document.getElementById('zoomLayer');
+  if (!zl) return;
+  ZOOM = clampZoom(ZOOM);
+  zl.style.transform = 'scale(' + ZOOM + ')';
+  zl.style.width = (lastTotalW * ZOOM) + 'px';
+  zl.style.height = (lastTotalH * ZOOM) + 'px';
+  const pct = document.getElementById('zoomPct');
+  if (pct) pct.textContent = Math.round(ZOOM * 100) + '%';
+  try { localStorage.setItem('agentnexus_zoom_' + PROJECT, String(ZOOM)); } catch (e) {}
+}
+function zoomBy(dir) { ZOOM = clampZoom(ZOOM * (dir > 0 ? 1.2 : 1 / 1.2)); applyZoom(); }
+function zoomFit() {
+  const wrap = document.getElementById('canvasWrap');
+  if (!wrap || !lastTotalW) return;
+  const z = Math.min(wrap.clientWidth / lastTotalW, wrap.clientHeight / lastTotalH);
+  ZOOM = clampZoom(z > 1.5 ? 1.5 : z);
+  applyZoom();
+  wrap.scrollLeft = 0; wrap.scrollTop = 0;
+}
+(function initZoomWheel() {
+  const wrap = document.getElementById('canvasWrap');
+  if (!wrap) return;
+  wrap.addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const oldZ = ZOOM;
+    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const nz = clampZoom(oldZ * f);
+    if (nz === oldZ) return;
+    const cx = (wrap.scrollLeft + mx) / oldZ;
+    const cy = (wrap.scrollTop + my) / oldZ;
+    ZOOM = nz;
+    applyZoom();
+    wrap.scrollLeft = cx * ZOOM - mx;
+    wrap.scrollTop = cy * ZOOM - my;
+  }, { passive: false });
+})();
+
 /* ===== 渲染 ===== */
 function render() {
   const { levels, pos } = buildLevels();
@@ -691,6 +746,8 @@ function render() {
   layer.style.height = totalH + 'px';
   svg.setAttribute('width', totalW);
   svg.setAttribute('height', totalH);
+  lastTotalW = totalW; lastTotalH = totalH;
+  applyZoom();
   nodePos = {};
   // 节点定位
   let html = '';
@@ -764,11 +821,12 @@ function enableNodeDrag() {
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
       if (!moved) return;
       el.classList.add('dragging');
-      el.style.left = (ox + dx) + 'px';
-      el.style.top = (oy + dy) + 'px';
+      const z = ZOOM || 1;
+      el.style.left = (ox + dx / z) + 'px';
+      el.style.top = (oy + dy / z) + 'px';
       const id = el.dataset.id;
       const p = nodePos[id];
-      if (p) { p.x = ox + dx; p.y = oy + dy; }
+      if (p) { p.x = ox + dx / z; p.y = oy + dy / z; }
       if (window.orderCache) renderLines(window.orderCache);
     });
     const end = (e) => {
@@ -1144,7 +1202,7 @@ function openPerson(agentId) {
       ${isTerminalAgent(a) ? `
       <div class="chat-box dsh-box" style="flex-direction:column;gap:0;align-items:stretch;">
         <div class="dsh-status">
-          <span class="ok">● 进程托管在线</span><span class="dim">模型：Space Bunny（锁定）</span>
+          <span class="ok">● 进程托管在线</span><span class="dim">模型：<select id="dshModelSelect" class="dsh-model-select" onchange="changeDshModel(this)"></select></span>
           <span class="dim" id="dshUsage">用量：${fmtTokens(dshTotalTokens())}</span>
           <button class="btn mini" onclick="clearDshHistory()" style="margin-left:auto;padding:2px 8px;font-size:11px;">清空会话</button>
         </div>
@@ -1163,6 +1221,8 @@ function openPerson(agentId) {
     </div>
     </div>`;
   document.getElementById('personModal').classList.add('show');
+  const msel = document.getElementById('dshModelSelect');
+  if (msel) loadDshModel(msel);
 }
 function closePerson() { document.getElementById('personModal').classList.remove('show'); }
 
@@ -1286,6 +1346,32 @@ function dshAppend(role, content) {
   box.insertAdjacentHTML('beforeend', `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(content)}</div>`);
   box.scrollTop = box.scrollHeight;
 }
+async function loadDshModel(sel) {
+  if (!sel) return;
+  try {
+    const r = await fetch('/api/dsh/model?project=' + encodeURIComponent(PROJECT));
+    const d = await r.json();
+    if (!d.ok || !d.whitelist) { sel.innerHTML = '<option>不可用</option>'; return; }
+    sel.innerHTML = d.whitelist.map(m => '<option value="' + esc(m) + '"' + (m === d.model ? ' selected' : '') + '>' + esc(d.labels && d.labels[m] ? d.labels[m] : m) + '</option>').join('');
+  } catch (e) { sel.innerHTML = '<option>加载失败</option>'; }
+}
+async function changeDshModel(sel) {
+  const m = sel.value;
+  if (!m) return;
+  try {
+    const r = await fetch('/api/dsh/model?project=' + encodeURIComponent(PROJECT), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: m })
+    });
+    const d = await r.json();
+    if (!d.ok) { alert(d.error || '切换失败'); loadDshModel(sel); return; }
+    const status = sel.closest('.dsh-status');
+    let tip = document.getElementById('dshModelTip');
+    if (!tip && status) { tip = document.createElement('span'); tip.id = 'dshModelTip'; tip.style.color = '#3fb950'; status.appendChild(tip); }
+    if (tip) { tip.textContent = '✓ 已切换 · 下次消息生效'; setTimeout(() => { tip.textContent = ''; }, 6000); }
+  } catch (e) { alert('切换失败：' + e.message); loadDshModel(sel); }
+}
+
 async function sendToTerminal() {
   const input = document.getElementById('dshInput');
   const btn = document.getElementById('dshSendBtn');

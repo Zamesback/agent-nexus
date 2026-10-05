@@ -2282,6 +2282,41 @@ def _dsh_log(msg):
 DSH_MODEL_WHITELIST = {"space-bunny-free", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash",
                        "deepseek-v4-flash-vision", "deepseek-v4-flash-vision-experience"}
 
+DSH_DEFAULT_MODEL = "space-bunny-free"
+DSH_MODEL_LABELS = {
+    "space-bunny-free": "Space Bunny（限时免费）",
+    "deepseek-flash": "DeepSeek Flash（旧别名）",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
+    "deepseek-v4-flash-vision": "DeepSeek V4 Flash Vision",
+    "deepseek-v4-flash-vision-experience": "DeepSeek V4 Flash Vision Experience",
+}
+
+def _dsh_lock_patch(project):
+    """按项目动态生成模型锁 overlay（CLI --patch 最高优先级）。
+    读 project_config.json 的 dsh.model；不在白名单则回退默认。"""
+    cfg = _dsh_load_cfg(project)
+    model = (cfg.get("dsh") or {}).get("model") or DSH_DEFAULT_MODEL
+    if model not in DSH_MODEL_WHITELIST:
+        model = DSH_DEFAULT_MODEL
+    safe = re.sub(r"[^\w\-]", "_", project or "default")
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", safe + "-model-lock.yml")
+    body = (
+        "# AgentNexus v2.15+ 模型锁 overlay（按项目动态生成）：CLI 层最高优先级\n"
+        f"# project={project} model={model}\n"
+        "- id: agent-default-model\n"
+        "  name: '@deepseek-ai/dsh-agent-default-model'\n"
+        "  config:\n"
+        "    provider: opencode-go-extra\n"
+        f"    model: {model}\n"
+    )
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+    except Exception as e:
+        _dsh_log("写模型锁失败 %s: %s" % (path, e))
+    return path
+
 def _dsh_config_path(project):
     files = get_project_files(project)
     return files.get("config_file")
@@ -2332,7 +2367,7 @@ def _dsh_verify_model():
 def _dsh_run(project, message, session_id, emit):
     """拉起 dsh headless 进程，流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
     import subprocess as _sp
-    _lock_patch = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "sanguo-model-lock.yml")
+    _lock_patch = _dsh_lock_patch(project)
     cmd = [DSH_NODE, DSH_CLI, "--profile", DSH_PROFILE, "--patch", _lock_patch, "--json"]
     if session_id:
         cmd += ["--session-id", session_id]
@@ -2368,6 +2403,41 @@ def _dsh_run(project, message, session_id, emit):
     except Exception as e:
         _dsh_log("dsh 子进程异常: %s" % e)
         return (False, new_sid, usage_agg)
+
+def _handle_dsh_model(self, project=None):
+        """GET/POST /api/dsh/model：读取当前接入模型 / 切换项目接入模型（白名单校验）"""
+        if self.command == "GET":
+            cfg = _dsh_load_cfg(project)
+            model = (cfg.get("dsh") or {}).get("model") or DSH_DEFAULT_MODEL
+            if model not in DSH_MODEL_WHITELIST:
+                model = DSH_DEFAULT_MODEL
+            self._send_json({"ok": True, "model": model,
+                             "whitelist": sorted(DSH_MODEL_WHITELIST),
+                             "labels": DSH_MODEL_LABELS})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        except Exception:
+            req = {}
+        model = (req.get("model") or "").strip()
+        if not model:
+            self._send_json({"ok": False, "error": "model 不能为空"}, status=400)
+            return
+        if model not in DSH_MODEL_WHITELIST:
+            self._send_json({"ok": False, "error": "模型不在白名单：" + str(sorted(DSH_MODEL_WHITELIST))}, status=400)
+            return
+        cfg = _dsh_load_cfg(project)
+        dsh_cfg = cfg.get("dsh") or {}
+        old = dsh_cfg.get("model")
+        dsh_cfg["model"] = model
+        if old != model:
+            dsh_cfg["session_id"] = ""  # 模型变了：下次起新会话，确保新模型生效
+        cfg["dsh"] = dsh_cfg
+        _dsh_save_cfg(project, cfg)
+        _dsh_log("模型切换 project=%s %s -> %s" % (project, old or "(default)", model))
+        self._send_json({"ok": True, "model": model,
+                         "note": "已生效：下一次消息将使用新模型（会话已重置）"})
 
 def _handle_dsh_chat(self, project=None):
     """POST /api/dsh/chat  SSE 流式：留言给终端 Agent，回复实时回传"""
@@ -2496,6 +2566,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._send_json({"decisions": data.get("decisions", [])})
             return
 
+        # API: 终端 Agent 模型配置（v2.15.2）
+        if parsed.path == "/api/dsh/model":
+            _handle_dsh_model(self, project)
+            return
+
         # API: 获取看板数据
         if parsed.path == "/api/board":
             self._send_json(load_board(project))
@@ -2596,6 +2671,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 会话（v2.15 进程托管）
         if parsed.path == "/api/dsh/chat":
             _handle_dsh_chat(self, project)
+            return
+
+        # API: 终端 Agent 模型配置（v2.15.2）
+        if parsed.path == "/api/dsh/model":
+            _handle_dsh_model(self, project)
             return
 
         # API: 创建新项目（多项目管理）
