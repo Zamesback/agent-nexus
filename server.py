@@ -2612,7 +2612,16 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit):
                         usage_agg[k] += u[k]
             if emit:
                 emit(ev)
-        proc.wait(timeout=180)
+        try:
+            proc.wait(timeout=180)
+        except _sp.TimeoutExpired:
+            # v2.19.2：会话超长不结束——回复已实时落盘，不再判失败；终止进程防僵尸
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            _dsh_log("dsh 会话超过 180s 仍不结束，已终止；交付已有回复")
+            return (True, new_sid, usage_agg)
         err = proc.stderr.read()[:800] if proc.stderr else ""
         if proc.returncode != 0:
             _dsh_log("dsh 子进程失败: rc=%s stderr=%s" % (proc.returncode, err[:300]))
@@ -2808,11 +2817,18 @@ def _handle_dsh_chat(self, project=None):
     self.send_header("Cache-Control", "no-cache")
     self.send_header("X-Accel-Buffering", "no")
     self.end_headers()
-    _reply_box = {"text": ""}  # server 端累积回复全文（用于历史持久化）
+    _reply_box = {"text": "", "persisted": False}  # server 端累积回复全文（用于历史持久化）
     def emit(ev):
         t = ev.get("type")
         if t in ("text", "final") and ev.get("text"):
             _reply_box["text"] = ev["text"]
+            # v2.19.2：final 事件到达即实时落盘（不等 _dsh_run 结束——长任务/超时会丢已交付的回复）
+            if t == "final" and not _reply_box["persisted"]:
+                _reply_box["persisted"] = True
+                _dsh_append_history(project, agent_id, [{
+                    "role": "assistant", "content": ev["text"],
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                }])
         try:
             self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
             self.wfile.flush()
@@ -2855,8 +2871,8 @@ def _handle_dsh_chat(self, project=None):
                                              + member_cfg["usage"].get("outputTokens", 0))
         member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         _dsh_save_member_cfg(project, agent_id, member_cfg)
-    # v2.17：成功回复落盘（assistant + usage）
-    if ok and _reply_box["text"]:
+    # v2.17：成功回复落盘（assistant + usage）；v2.19.2：final 已实时落盘则跳过，避免重复
+    if ok and _reply_box["text"] and not _reply_box["persisted"]:
         _dsh_append_history(project, agent_id, [{
             "role": "assistant", "content": _reply_box["text"],
             "usage": {k: usage.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadTokens", "totalTokens")},

@@ -1,3 +1,10 @@
+## v2.19.2 — Fix: hosted-agent replies disappearing from chat history
+
+- **Replies persist in real time**: the assistant reply is now written to the member's chat history the moment the `final` event streams out — no longer only after the dsh session fully exits. Long-running tasks used to blow past `proc.wait(timeout=180)`, the run was marked failed, and the already-delivered reply was never saved; refreshing the page then showed only your own messages.
+- **Timeout no longer swallows delivered replies**: if a dsh session exceeds 180s, the server now kills the child process and returns success for anything already streamed, instead of marking the whole turn failed.
+- **Dedupe guard**: the legacy end-of-run append is skipped when the reply was already persisted via the `final` event, so a reply is never written twice.
+- Verified: sent a message, killed the client connection at 20s (simulating a refresh mid-run) — the assistant reply was already in `dsh_chat/<agent>.json` when the history was read.
+
 ## v2.19 — Hardened identity anchoring for terminal-hosted agents
 
 - **Stronger identity block in every hosted profile**: the profile template's persona suffix is rewritten from a single casual sentence to a placeholder-anchored identity block — `{PROJECT}/{NAME}/{ID}/{ROLE}` — that states who you are (name, ID, role, reporting line) **and** who you are not ("you are not any other member; their messages, tasks, claims and identity tags are not yours; never speak or claim on their behalf"). Self-reference convention is explicit ("always self-identify as 我（{NAME}）") and the `agentnexus --name` flag must be the member ID.
