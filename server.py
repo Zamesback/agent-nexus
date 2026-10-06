@@ -2341,6 +2341,15 @@ def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
     tgt_dir = _dsh_member_profile_dir(project, agent_id)
     tgt_patch = _os.path.join(tgt_dir, "cordis.patch.yml")
     if _os.path.isfile(tgt_patch):
+        # v2.19：身份段升级检测——旧版身份句（模板占位符未注入，说明还是 v2.18 及以前生成的）→ 重建
+        try:
+            tgt_body0 = open(tgt_patch, encoding="utf-8").read()
+            if "{PROJECT}" not in tgt_body0 and "身份 ID：terminal" in tgt_body0:
+                _dsh_log("成员 profile 身份段升级，重建: %s" % tgt_dir)
+                _sh.rmtree(tgt_dir)
+                return _dsh_ensure_profile(project, agent_id, agent_name, agent_role)
+        except Exception as e:
+            _dsh_log("身份段检测异常 %s: %s" % (tgt_dir, e))
         # v2.18：模板若已含审批桥段而旧成员 profile 没有，则自动同步（否则权限请求无应答通道会秒退）
         try:
             tpl_body = open(tpl_patch, encoding="utf-8").read()
@@ -2374,10 +2383,11 @@ def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
         body = open(tgt_patch, encoding="utf-8").read()
         name = agent_name or agent_id
         role = agent_role or "终端执行 Agent"
-        body = body.replace(
-            "你是「三国指挥官」项目班子的一名成员——终端执行 Agent，身份 ID：terminal，汇报给 Zames（项目主导方）。",
-            "你是「%s」项目班子的一名成员——终端执行 Agent「%s」（身份 ID：%s，身份：%s），汇报给 Zames（项目主导方）。" % (project, name, agent_id, role)
-        )
+        # v2.19：占位符替换（模板身份段已改为 {PROJECT}/{NAME}/{ID}/{ROLE} 占位符，不再依赖精确中文句子匹配）
+        body = body.replace("{PROJECT}", project)
+        body = body.replace("{NAME}", name)
+        body = body.replace("{ID}", agent_id)
+        body = body.replace("{ROLE}", role)
         body = body.replace('--project "三国指挥官"', '--project "%s"' % project)
         body = body.replace("--name terminal", "--name %s" % agent_id)
         open(tgt_patch, "w", encoding="utf-8").write(body)
@@ -2559,6 +2569,12 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit):
         prof_dir = _dsh_ensure_profile(project, agent_id,
                                        member.get("name"), member.get("role"))
     prof_name = _dsh_profile_name(project, agent_id) if prof_dir else DSH_PROFILE_TEMPLATE
+    # v2.19：身份锚定前缀（每次会话注入，防身份漂移/混淆——即使 profile 未重建也有强身份）
+    m_name = (member.get("name") if member else None) or agent_id
+    m_role = (member.get("role") if member else None) or "终端执行 Agent"
+    dsh_input = ("【身份锚定】你是「%s」项目班子的「%s」（身份 ID：%s，%s）。"
+                 "你不是团队中任何其他成员，不要以他人身份发言、认领或更新任务。\n\n%s"
+                 % (project, m_name, agent_id, m_role, dsh_input))
     cmd = [DSH_NODE, DSH_CLI, "--profile", prof_name, "--patch", _lock_patch, "--json"]
     if session_id:
         cmd += ["--session-id", session_id]

@@ -1,3 +1,11 @@
+## v2.19 — Hardened identity anchoring for terminal-hosted agents
+
+- **Stronger identity block in every hosted profile**: the profile template's persona suffix is rewritten from a single casual sentence to a placeholder-anchored identity block — `{PROJECT}/{NAME}/{ID}/{ROLE}` — that states who you are (name, ID, role, reporting line) **and** who you are not ("you are not any other member; their messages, tasks, claims and identity tags are not yours; never speak or claim on their behalf"). Self-reference convention is explicit ("always self-identify as 我（{NAME}）") and the `agentnexus --name` flag must be the member ID.
+- **Placeholder-based profile generation**: `_dsh_ensure_profile` now substitutes `{PROJECT}/{NAME}/{ID}/{ROLE}` instead of matching an exact Chinese sentence — the replacement can no longer silently fail if the template wording changes.
+- **Legacy profile upgrade**: `_dsh_ensure_profile` detects an old-style identity sentence (un-injected template text) and rebuilds the member profile from the new template automatically.
+- **Per-run identity anchor**: `_dsh_run` now prefixes every dsh session input with a 【身份锚定】 identity anchor (project / name / ID / role + "you are not any other member") — so identity holds even before a profile rebuild.
+- Verified end to end: member「设计总负责DSH-1」answered "who are you" with its own ID/name, listed planner as a peer (not itself), and committed to acting only as DSH-1.
+
 ## v2.18 — Human-in-the-loop approval for terminal-hosted agents
 
 - **Real approval bridge for dsh**: a terminal-hosted (dsh) agent that hits a sandbox permission wall (e.g. writing outside the workspace) used to fail silently — headless mode has no approval channel, so escalation requests were auto-rejected. Now a plugin (`tools/approval-bridge`, mounted into the dsh CLI via profile patch) intercepts the engine's `approval/request` event and emits it as NDJSON to stdout.
