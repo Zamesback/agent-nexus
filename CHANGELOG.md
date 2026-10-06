@@ -1,3 +1,11 @@
+## v2.19.3 — Terminal-hosted agents: work-in-progress visibility
+
+- **Live progress indicator**: the chat panel now renders dsh `status` events — a pulsing「⏳ 正在工作中 · 第 N 步…」appears while the agent is executing a step and disappears on `turn_end` (previously the panel just sat silent while the agent worked).
+- **Collapsible thinking blocks**: `thinking` events render as foldable「🧠 思考 #N」blocks (default collapsed; click to read the full reasoning).
+- **Watchdog instead of deadlock-prone wait**: `proc.wait(timeout=180)` sat *after* the stdout read loop, so a child that stopped writing but stayed alive blocked the thread forever and the timeout never fired. A watchdog thread now kills the child at 180s, unblocking the read loop; anything already streamed is treated as delivered.
+- **Upstream errors are now visible**: a stderr monitor detects model failures (`Model is unavailable` / upstream 400), kills the hung child, and emits a `dsh_error` event — the panel shows「⚠️ 模型服务暂不可用…」instead of hanging on「回复中…」forever. A `dsh_done` with no reply also surfaces a failure notice instead of staying silent.
+- Verified end to end: activity indicator shows on `step_start`; an upstream model outage was caught, surfaced to the panel, and the hung process reaped within ~2s.
+
 ## v2.19.2 — Fix: hosted-agent replies disappearing from chat history
 
 - **Replies persist in real time**: the assistant reply is now written to the member's chat history the moment the `final` event streams out — no longer only after the dsh session fully exits. Long-running tasks used to blow past `proc.wait(timeout=180)`, the run was marked failed, and the already-delivered reply was never saved; refreshing the page then showed only your own messages.

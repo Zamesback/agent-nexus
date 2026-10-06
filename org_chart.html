@@ -441,6 +441,12 @@
   .dsh-msg { max-width: 88%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
   .dsh-msg.user { align-self: flex-end; background: #444; color: #fff; }
   .dsh-msg.assistant { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  /* v2.19.3：思考折叠块 + 工作进展指示 */
+  .dsh-thinking { align-self: flex-start; max-width: 88%; background: var(--panel-2); border: 1px dashed var(--line); border-radius: 10px; padding: 6px 10px; font-size: 12px; color: var(--dim-1); }
+  .dsh-thinking summary { cursor: pointer; font-weight: 600; color: var(--text); user-select: none; }
+  .dsh-thinking .th-body { margin-top: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; max-height: 220px; overflow-y: auto; }
+  .dsh-msg.thinking { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); color: var(--dim-1); font-size: 12px; animation: dshPulse 1.4s ease-in-out infinite; }
+  @keyframes dshPulse { 0%,100% { opacity: .75; } 50% { opacity: 1; } }
   .dsh-msg.thinking { align-self: flex-start; background: transparent; border: 1px dashed var(--line-2); color: var(--dim); font-size: 12px; }
   .dsh-msg .who { font-size: 10px; font-family: var(--mono); color: var(--dim-2); display: block; margin-bottom: 3px; }
   .dsh-usage { font-size: 10px; font-family: var(--mono); color: var(--dim-2); padding: 4px 0 0 2px; }
@@ -1315,6 +1321,15 @@ function dshAppend(role, content) {
   box.insertAdjacentHTML('beforeend', `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(content)}</div>`);
   box.scrollTop = box.scrollHeight;
 }
+// v2.19.3：思考过程折叠块（默认收起，点开看完整推导）
+function appendThinking(text) {
+  const box = document.getElementById('dshMsgs');
+  if (!box || !text) return;
+  const n = document.querySelectorAll('.dsh-thinking').length + 1;
+  box.insertAdjacentHTML('beforeend',
+    '<details class="dsh-thinking"><summary>🧠 思考 #' + n + '</summary><div class="th-body">' + esc2(text) + '</div></details>');
+  box.scrollTop = box.scrollHeight;
+}
 async function loadDshModel(sel) {
   if (!sel) return;
   try {
@@ -1377,16 +1392,37 @@ async function sendToTerminal() {
         if (!raw.startsWith('data: ')) continue;
         let ev; try { ev = JSON.parse(raw.slice(6)); } catch (e) { continue; }
         const t = ev.type;
-        if (t === 'session' || t === 'status') continue;
-        if (t === 'thinking') {
-          if (!gotReply) { dshAppend('thinking', '（思考中…）'); gotReply = true; }
+        if (t === 'session') continue;
+        if (t === 'status') {  // v2.19.3：步骤进展可见——「正在工作中 · 第 N 步」
+          const ph = ev.phase || '';
+          const act = document.getElementById('dshActivity');
+          if (ph === 'step_start') {
+            if (act) act.innerHTML = '<span class="who">终端 Agent</span>⏳ 正在工作中 · 第 ' + (ev.step || 1) + ' 步…';
+            else {
+              const box = document.getElementById('dshMsgs');
+              if (box) box.insertAdjacentHTML('beforeend', '<div class="dsh-msg thinking" id="dshActivity"><span class="who">终端 Agent</span>⏳ 正在工作中 · 第 ' + (ev.step || 1) + ' 步…</div>');
+            }
+          } else if (ph === 'turn_end' && act) {
+            act.remove();
+          }
+          continue;
+        }
+        if (t === 'thinking') {  // v2.19.3：思考过程折叠可见（可展开）
+          appendThinking(ev.text);
           continue;
         }
         if (t === 'approval') {
           renderApproval(ev);
           continue;
         }
+        if (t === 'dsh_error') {  // v2.19.3：模型/上游错误可见，不再静默卡住
+          const act = document.getElementById('dshActivity'); if (act) act.remove();
+          dshAppend('assistant', '⚠️ ' + (ev.error || '会话异常'));
+          gotReply = true;
+          continue;
+        }
         if (t === 'text') {
+          const act = document.getElementById('dshActivity'); if (act) act.remove();
           replyContent = ev.text || '';
           if (!gotReply) { dshAppend('assistant', replyContent); gotReply = true; }
           else {
@@ -1406,6 +1442,8 @@ async function sendToTerminal() {
           continue;
         }
         if (t === 'dsh_done') {
+          const act = document.getElementById('dshActivity'); if (act) act.remove();  // v2.19.3 兜底
+          if (!ev.ok && replyContent === '' && !gotReply) dshAppend('assistant', '⚠️ 会话未完成（超时或进程中断），没有产出回复。');  // v2.19.3 不再静默
           const usage = ev.usage || {};
           const total = ev.total_usage || {};
           dshMsgsCache.push({ role: 'assistant', content: replyContent, usage: { inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0, totalTokens: usage.totalTokens || 0 } });

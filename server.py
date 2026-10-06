@@ -2555,6 +2555,7 @@ def _dsh_verify_model(profile_name=DSH_PROFILE):
 def _dsh_run(project, agent_id, dsh_input, session_id, emit):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
     import subprocess as _sp
+    import time as _time
     _dsh_log("进入 _dsh_run: agent=%s sid=%s" % (agent_id, session_id))
     _lock_patch = _dsh_lock_patch(project)
     _dsh_log("lock_patch=%s" % _lock_patch)
@@ -2586,6 +2587,47 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit):
         proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
                          encoding="utf-8", errors="replace", stdin=_sp.DEVNULL)
         _dsh_log("Popen ok pid=%s cmd0=%s" % (proc.pid, proc.args[0] if isinstance(proc.args, list) else ""))
+        # v2.19.3：watchdog 超时终止——stdout 阻塞读时 wait(timeout) 永远到不了，
+        # 必须由独立线程在超时后 kill，stdout 才会 EOF、读取循环才能退出
+        _wd_stop = [False]
+        def _watchdog():
+            try:
+                _time.sleep(180)
+                _wd_stop[0] = True
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                _dsh_log("dsh watchdog 180s 超时，已终止 pid=%s（交付已有回复）" % proc.pid)
+            except Exception:
+                pass
+        import threading as _wd_th
+        _wd = _wd_th.Thread(target=_watchdog, daemon=True)
+        _wd.start()
+        # v2.19.3：stderr 监控——模型错误/上游失败即时转发前端，不再静默卡住
+        _err_flag = [False]
+        def _stderr_reader():
+            try:
+                for line in proc.stderr:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    _dsh_log("dsh stderr: %s" % line[:200])
+                    low = line.lower()
+                    if ("model is unavailable" in low or "model_not_found" in low or
+                            ("invalid_request" in low and "unavailable" in low)):
+                        _err_flag[0] = True
+                        if emit:
+                            emit({"type": "dsh_error",
+                                  "error": "模型服务暂不可用（上游 400）。请稍后重试，或在成员卡片右上角切换模型。"})
+                        _wd_stop[0] = True
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        _wd_th.Thread(target=_stderr_reader, daemon=True).start()
         _first_ev = True
         for raw in proc.stdout:
             raw = raw.strip()
@@ -2612,17 +2654,12 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit):
                         usage_agg[k] += u[k]
             if emit:
                 emit(ev)
-        try:
-            proc.wait(timeout=180)
-        except _sp.TimeoutExpired:
-            # v2.19.2：会话超长不结束——回复已实时落盘，不再判失败；终止进程防僵尸
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            _dsh_log("dsh 会话超过 180s 仍不结束，已终止；交付已有回复")
-            return (True, new_sid, usage_agg)
+        proc.wait(timeout=30)
         err = proc.stderr.read()[:800] if proc.stderr else ""
+        if _wd_stop[0]:
+            # v2.19.3：watchdog 超时终止——已有流式回复即视为已交付（final 已实时落盘）
+            _dsh_log("dsh 会话超时终止（watchdog），交付已有回复")
+            return (True, new_sid, usage_agg)
         if proc.returncode != 0:
             _dsh_log("dsh 子进程失败: rc=%s stderr=%s" % (proc.returncode, err[:300]))
             return (False, new_sid, usage_agg)
