@@ -2344,7 +2344,8 @@ def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
         # v2.19：身份段升级检测——旧版身份句（模板占位符未注入，说明还是 v2.18 及以前生成的）→ 重建
         try:
             tgt_body0 = open(tgt_patch, encoding="utf-8").read()
-            if "{PROJECT}" not in tgt_body0 and "身份 ID：terminal" in tgt_body0:
+            # v2.19：缺 v2.19 身份锚定标题（「【你的身份 · 每次开口前先确认】」）即视为旧版 → 重建
+            if "【你的身份 · 每次开口前先确认】" not in tgt_body0:
                 _dsh_log("成员 profile 身份段升级，重建: %s" % tgt_dir)
                 _sh.rmtree(tgt_dir)
                 return _dsh_ensure_profile(project, agent_id, agent_name, agent_role)
