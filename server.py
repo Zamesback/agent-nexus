@@ -2573,6 +2573,10 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
         prof_dir = _dsh_ensure_profile(project, agent_id,
                                        member.get("name"), member.get("role"))
     prof_name = _dsh_profile_name(project, agent_id) if prof_dir else DSH_PROFILE_TEMPLATE
+    # v2.20.1：启动前清理该成员残留的 dsh 进程——dsh 是 agent 循环，回复 final 后不退出，
+    # 若锁释放后旧进程仍活着，新进程用同一 --session-id 启动会报 "already owned by an active
+    # write handle" 并挂起（表现为连续留言时断断续续、无回复）。
+    _sp.run(["pkill", "-9", "-f", "bin.js --profile " + prof_name], capture_output=True)
     # v2.19：身份锚定前缀（每次会话注入，防身份漂移/混淆——即使 profile 未重建也有强身份）
     m_name = (member.get("name") if member else None) or agent_id
     m_role = (member.get("role") if member else None) or "终端执行 Agent"

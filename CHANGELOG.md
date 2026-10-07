@@ -1,3 +1,9 @@
+## v2.20.1 — Fix: consecutive messages to a hosted agent going unanswered
+
+- **Root cause**: dsh is an agent loop — after streaming its final reply the process stays alive (it won't exit on its own), still holding the session write lock. A second message arriving while the first process is alive spawned a new process with the same `--session-id`, hit `session "…" is already owned by an active write handle`, and hung with no reply — exactly the "断断续续 / 你还在吗" no-response behavior the user hit with 设计总负责DSH-1.
+- **Fix**: `_dsh_run` now kills any lingering process of the same member profile before spawning the new one, so every new message starts a clean session and always receives a reply. The displaced run's user message is already persisted on arrival (v2.17), and the most recent message always gets a live answer.
+- Verified: fired a long task then, 6s later, a "you still there?" follow-up — the follow-up replied with a fresh board snapshot (任务 57 个，进行中 3 / 待做 5 / 完成 46) and the reply was persisted to chat history.
+
 ## v2.20 — Discussion Room: real multi-agent conversation
 
 - **Discussion Room v1**: on the org chart page, a new「讨论室」top-bar button opens a discussion room where multiple terminal-hosted (dsh) members actually converse with each other — not just each reply to the same prompt. A moderator loop wakes one member at a time, hands each the full transcript so far, and instructs each speaker to respond to the previous speaker's point before adding their own.
