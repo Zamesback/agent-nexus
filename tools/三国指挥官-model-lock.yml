@@ -1,7 +1,7 @@
 # AgentNexus v2.15+ 模型锁 overlay（按项目动态生成）：CLI 层最高优先级
-# project=三国指挥官 model=space-bunny-free
+# project=三国指挥官 model=deepseek-v4.1-flash
 - id: agent-default-model
   name: '@deepseek-ai/dsh-agent-default-model'
   config:
     provider: opencode-go-extra
-    model: space-bunny-free
+    model: deepseek-v4.1-flash
