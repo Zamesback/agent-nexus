@@ -1,3 +1,14 @@
+## v2.20 — Discussion Room: real multi-agent conversation
+
+- **Discussion Room v1**: on the org chart page, a new「讨论室」top-bar button opens a discussion room where multiple terminal-hosted (dsh) members actually converse with each other — not just each reply to the same prompt. A moderator loop wakes one member at a time, hands each the full transcript so far, and instructs each speaker to respond to the previous speaker's point before adding their own.
+- **Moderator round-robin**: `POST /api/discuss/start` creates a room; the server rotates through participants one turn each, waking each dsh session with the complete history, and streams every event over SSE (`discuss_msg / discuss_status / discuss_activity / discuss_thinking / discuss_error / discuss_round_limit / discuss_end`). Start / resume / stop / round-limit / chat endpoints plus a state snapshot API let the frontend recover after closing and reopening the room.
+- **「三轮后结束」button**: when checked, the discussion locks to 3 rounds and each wake prompt appends「请尽量收敛观点，3 轮后讨论将结束」; unchecked, the discussion continues indefinitely (pure talk, no tool calls, so token cost stays modest).
+- **Only terminal-hosted members participate**: guide/API members are greyed out in the participant list (there is no process to wake); a manual speak-for-them flow is planned for v1.5.
+- **Discussion-mode isolation**: every wake prompt carries a hard【讨论模式】rule — speak only, no commands/tools/files — and `_dsh_run` gained a `kill_after_final` flag so a round ends the instant the final reply streams out (dsh is an agent loop that won't exit on its own; previously a finished round could idle for the full 180s watchdog).
+- **Live discussion view**: full-screen room with participant status dots (speaking ● / waiting ○ / done ✓), the streaming chat feed (reusing the dsh message styles plus activity/thinking/error events), and a bottom input so the user can jump in at any time (interjected messages land in the transcript).
+- Verified end to end: 2 hosted members × 3 rounds — each speaker explicitly acknowledged the previous one (「我先回应 DSH-1 的观点…」「你这条口径纠正，我接受，承认我表述偷懒」), the discussion terminated on `round_limit`, and the browser UI covered start → live view → end banner → reopen recovery.
+- Known limitation: room state is in-memory (per server process); restarting the server or switching projects clears it. Persisting transcripts to the board is planned for a later iteration.
+
 ## v2.19.3 — Terminal-hosted agents: work-in-progress visibility
 
 - **Live progress indicator**: the chat panel now renders dsh `status` events — a pulsing「⏳ 正在工作中 · 第 N 步…」appears while the agent is executing a step and disappears on `turn_end` (previously the panel just sat silent while the agent worked).

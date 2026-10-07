@@ -156,6 +156,29 @@
   }
   .board-mask.show { display: block; }
   .board-frame { width: 100%; height: 100%; border: 0; display: block; }
+
+  /* ===== 讨论室 v2.20 ===== */
+  .discuss-toggle { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); cursor:pointer; user-select:none; }
+  .discuss-toggle input { accent-color:var(--accent); }
+  .discuss-member { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; cursor:pointer; font-size:13px; }
+  .discuss-member:hover { background:var(--panel-2); }
+  .discuss-member.disabled { opacity:.45; cursor:not-allowed; }
+  .discuss-member .dm-tag { font-size:11px; color:var(--dim-1); }
+  .discuss-room { position:fixed; inset:0; z-index:120; background:var(--bg); display:flex; flex-direction:column; }
+  .dr-top { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel-1); }
+  .dr-title { font-size:16px; font-weight:600; }
+  .dr-sub { font-size:12px; color:var(--dim-1); }
+  .dr-body { flex:1; display:flex; min-height:0; }
+  .dr-members { width:200px; border-right:1px solid var(--line); padding:10px; overflow-y:auto; flex-shrink:0; }
+  .dr-mem { padding:8px 10px; border-radius:8px; margin-bottom:6px; border:1px solid var(--line); background:var(--panel-1); font-size:13px; }
+  .dr-mem .dm-name { font-weight:600; }
+  .dr-mem .dm-st { font-size:11px; color:var(--dim-1); margin-top:2px; }
+  .dr-mem.speaking { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .dr-chat { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .dr-chat .dsh-msgs { flex:1; }
+  .dr-input { display:flex; gap:8px; padding:10px 16px; border-top:1px solid var(--line); }
+  .dr-input input { flex:1; }
+  .dr-banner { position:fixed; left:50%; top:14px; transform:translateX(-50%); background:var(--accent); color:var(--bg); padding:8px 18px; border-radius:20px; font-size:13px; font-weight:600; box-shadow:0 4px 20px rgba(0,0,0,.3); z-index:130; }
   .board-close {
     position: fixed; top: 14px; right: 18px; z-index: 101;
     border: 1px solid var(--line-2);
@@ -466,6 +489,7 @@
     </div>
     <div class="topbar-right">
       <button class="btn" id="btn-board" title="切到任务看板">看板</button>
+      <button class="btn" id="btn-discuss" title="多人讨论室（终端托管成员）" onclick="openDiscuss()">讨论室</button>
       <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
       <button class="btn ghost" id="btn-layout" onclick="toggleLayout()" title="切换组织图布局方向（左右/上下）">⇄ 左右</button>
@@ -553,6 +577,53 @@
   <div class="board-mask" id="boardModal">
     <button class="board-close" id="boardClose" title="返回组织视图">← 返回组织</button>
     <iframe class="board-frame" id="boardFrame" title="任务看板"></iframe>
+  </div>
+
+  <!-- 讨论室：发起弹窗（v2.20） -->
+  <div class="modal-mask" id="discussModal" onclick="if(event.target===this)closeDiscussModal()">
+    <div class="modal" style="width:540px;">
+      <div class="modal-head">
+        <div style="font-size:15px;font-weight:600;">🗣 发起讨论室</div>
+        <button class="modal-close" onclick="closeDiscussModal()">✕</button>
+      </div>
+      <div class="pos-form">
+        <input id="discussTopic" placeholder="讨论主题，如：棋盘格子缩小方案是否可行？" maxlength="80">
+        <div style="font-size:12px;color:var(--dim);margin:2px 0 4px;">参与成员（仅终端托管可自动发言；其余成员会显示但无法参与）</div>
+        <div id="discussMemberList" style="max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:6px;"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+          <label class="discuss-toggle" title="点后唤醒上限锁 3 轮，并提示成员收敛观点">
+            <input type="checkbox" id="discussLimit3"> <span>三轮后结束讨论</span>
+          </label>
+        </div>
+        <div class="pos-actions">
+          <button class="btn" onclick="closeDiscussModal()">取消</button>
+          <button class="btn primary" id="discussStartBtn" onclick="startDiscuss()">开始讨论</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 讨论室：全屏视图（v2.20） -->
+  <div class="discuss-room" id="discussRoom" style="display:none;">
+    <div class="dr-top">
+      <div class="dr-title" id="drTitle">讨论室</div>
+      <div class="dr-sub" id="drSub"></div>
+      <div style="flex:1"></div>
+      <button class="btn" id="drLimitBtn" onclick="toggleDiscussLimit()">三轮后结束讨论</button>
+      <button class="btn ghost" id="drClose" onclick="hideDiscussRoom()">收起（讨论继续）</button>
+      <button class="btn primary" id="drStop" onclick="stopDiscuss()">结束讨论</button>
+    </div>
+    <div class="dr-body">
+      <div class="dr-members" id="drMembers"></div>
+      <div class="dr-chat">
+        <div class="dsh-msgs" id="drMsgs"></div>
+        <div class="dr-input">
+          <input id="drChatInput" placeholder="插话（广播进群，下一位成员会看到）…">
+          <button class="btn primary" onclick="sendDiscussChat()">发言</button>
+        </div>
+      </div>
+    </div>
+    <div class="dr-banner" id="drBanner" style="display:none;"></div>
   </div>
 
 <script>
@@ -1610,6 +1681,225 @@ async function loadProjects() {
 }
 
 /* ===== 看板浮层 ===== */
+/* ===== 讨论室 v2.20 ===== */
+let discussCtrl = null;        // AbortController（隐藏视图时断开 SSE，讨论在后台继续）
+let discussEnded = false;
+
+function isTerminalMember(a) {
+  const e = (a.entry && a.entry.type) || a.entry_type || '';
+  return e === 'dsh' || String(a.role || '').includes('终端');
+}
+
+function openDiscuss() {
+  fetch('/api/discuss/state' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''))
+    .then(r => r.json()).then(s => {
+      if (s.active || (s.history && s.history.length)) { showDiscussRoom(); return; }   // 有讨论（进行中或已结束）→ 恢复视图
+      renderDiscussMembers();
+      document.getElementById('discussModal').classList.add('show');
+    }).catch(() => { renderDiscussMembers(); document.getElementById('discussModal').classList.add('show'); });
+}
+
+async function renderDiscussMembers() {
+  const box = document.getElementById('discussMemberList');
+  let html = '<div style="padding:10px;color:var(--dim);font-size:12px;">加载中…</div>';
+  try {
+    const resp = await fetch('/api/board' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''));
+    const board = await resp.json();
+    const all = (board.agents || []).filter(a => a.id !== 'user');
+    const term = all.filter(a => isTerminalMember(a));
+    const others = all.filter(a => !isTerminalMember(a));
+    const row = a => '<div class="discuss-member"><input type="checkbox" data-id="' + esc2(a.id) + '" checked>'
+      + '<span>' + esc2(a.name || a.id) + '</span><span class="dm-tag">可参与 · 终端托管</span></div>';
+    const rowX = a => '<div class="discuss-member disabled"><input type="checkbox" disabled>'
+      + '<span>' + esc2(a.name || a.id) + '</span><span class="dm-tag">不可自动参与 · ' + esc2(((a.entry || {}).type || a.entry_type || '—')) + '</span></div>';
+    html = (term.length ? term.map(row).join('') : '<div style="padding:10px;color:var(--dim-1);font-size:12px;">没有终端托管成员——先「＋ 加位子」以终端托管拉入成员。</div>')
+      + others.map(rowX).join('');
+  } catch (e) { html = '<div style="padding:10px;color:var(--dim);font-size:12px;">成员加载失败</div>'; }
+  box.innerHTML = html;
+}
+function closeDiscussModal() { document.getElementById('discussModal').classList.remove('show'); }
+
+async function startDiscuss() {
+  const topic = document.getElementById('discussTopic').value.trim() || '讨论';
+  const participants = Array.from(document.querySelectorAll('#discussMemberList input:checked')).map(i => i.dataset.id);
+  if (participants.length < 2) { alert('请至少选择 2 个可参与成员'); return; }
+  const limit3 = document.getElementById('discussLimit3').checked;
+  const btn = document.getElementById('discussStartBtn');
+  btn.disabled = true; btn.textContent = '发起中…';
+  // start 的响应是持续 SSE 流（讨论期间不结束），不能 await 等它结束；
+  // 后台发起即可，事件由 resume/state 流实时推送。
+  discussCtrl = new AbortController();
+  fetch('/api/discuss/start' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ participants, topic, round_limit: limit3 ? 3 : null }),
+    signal: discussCtrl.signal
+  }).then(resp => {
+    if (!resp.ok) resp.json().catch(() => ({})).then(err => alert('发起失败：' + (err.error || resp.status)));
+  }).catch(e => { if (e.name !== 'AbortError') console.error('discuss start:', e); });
+  closeDiscussModal();
+  showDiscussRoom();
+  document.getElementById('drSub').textContent = '发起中…';
+  renderDrMembers(participants);
+  discussEnded = false;
+  resumeDiscuss();
+  btn.disabled = false; btn.textContent = '开始讨论';
+}
+
+async function showDiscussRoom() {
+  document.getElementById('discussRoom').style.display = 'flex';
+  const s = await fetch('/api/discuss/state' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '')).then(r => r.json()).catch(() => ({}));
+  document.getElementById('drTitle').textContent = '🗣 讨论室' + (s.topic ? ' · ' + s.topic : '');
+  document.getElementById('drSub').textContent = s.active
+    ? ('进行中 · 已 ' + (s.round_count || 0) + ' 轮' + (s.round_limit ? ' · ' + s.round_limit + ' 轮后结束' : ''))
+    : '已结束';
+  document.getElementById('drBanner').textContent = s.active ? '' : (s.round_limit && (s.round_count || 0) >= s.round_limit ? '讨论已结束（达到轮次上限）' : '讨论已结束');
+  updateDrLimitBtn(s.round_limit);
+  if (s.history) renderDrHistory(s.history);
+  if (s.participants) renderDrMembers(s.participants);
+  if (s.active && s.busy) setDrSpeaker(s.busy, 'speaking');
+  if (!discussCtrl) {           // 已有讨论、重新进入 → resume 重连
+    discussEnded = false;
+    resumeDiscuss();
+  }
+}
+
+function hideDiscussRoom() {
+  if (discussCtrl) { discussCtrl.abort(); discussCtrl = null; }   // 断开 SSE；讨论在 server 后台继续
+  document.getElementById('discussRoom').style.display = 'none';
+}
+
+async function resumeDiscuss() {
+  discussCtrl = new AbortController();
+  try {
+    const resp = await fetch('/api/discuss/resume' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: discussCtrl.signal
+    });
+    if (!resp.ok) return;
+    consumeDiscussStream(resp);
+  } catch (e) { /* abort 属正常 */ }
+}
+
+async function consumeDiscussStream(resp) {
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n\n');
+    buf = lines.pop();
+    for (const raw of lines) {
+      if (!raw.startsWith('data: ')) continue;
+      let ev; try { ev = JSON.parse(raw.slice(6)); } catch (e) { continue; }
+      handleDiscussEvent(ev);
+    }
+  }
+  discussCtrl = null;
+}
+
+function handleDiscussEvent(ev) {
+  const t = ev.type;
+  if (t === 'discuss_msg') { drAppend(ev.msg); return; }
+  if (t === 'discuss_status') {
+    setDrSpeaker(ev.speaker, 'speaking');
+    document.getElementById('drSub').textContent = '进行中 · 已 ' + (ev.round || 0) + ' 轮' + (ev.round_limit ? ' · ' + ev.round_limit + ' 轮后结束' : '');
+    return;
+  }
+  if (t === 'discuss_activity') { drActivity(ev.speaker, ev.step); return; }
+  if (t === 'discuss_thinking') { drThinking(ev.speaker, ev.text); return; }
+  if (t === 'discuss_error') {
+    const act = document.getElementById('drActivity'); if (act) act.remove();
+    drAppend({ from: '系统', text: '⚠️ ' + (ev.error || '成员异常'), ts: '' });
+    if (ev.speaker) setDrSpeaker(ev.speaker, 'waiting');
+    return;
+  }
+  if (t === 'discuss_round_limit') { updateDrLimitBtn(ev.limit); return; }
+  if (t === 'discuss_state') {
+    document.getElementById('drTitle').textContent = '🗣 讨论室 · ' + (ev.topic || '');
+    updateDrLimitBtn(ev.round_limit);
+    return;
+  }
+  if (t === 'discuss_end') {
+    discussEnded = true;
+    document.getElementById('drBanner').style.display = 'block';
+    document.getElementById('drBanner').textContent = '讨论已结束' + (ev.reason === 'round_limit' ? '（达到轮次上限）' : ev.reason === 'user_stop' ? '（你叫停了）' : '');
+    document.getElementById('drSub').textContent = '已结束';
+    Array.from(document.querySelectorAll('#drMembers .dr-mem')).forEach(el => el.classList.remove('speaking'));
+    setTimeout(() => { document.getElementById('drBanner').style.display = 'none'; }, 4000);
+  }
+}
+
+function renderDrHistory(history) {
+  const box = document.getElementById('drMsgs');
+  box.innerHTML = '';
+  (history || []).forEach(m => drAppend(m, true));
+}
+function drAppend(m, noScroll) {
+  const box = document.getElementById('drMsgs');
+  if (!box) return;
+  const who = m.from === '你' ? '你' : esc2(m.from || '成员');
+  box.insertAdjacentHTML('beforeend', '<div class="dsh-msg ' + (m.from === '你' ? 'user' : 'assistant') + '"><span class="who">' + who + '</span>' + esc2(m.text || '') + '</div>');
+  if (!noScroll) box.scrollTop = box.scrollHeight;
+}
+function drActivity(speaker, step) {
+  const act = document.getElementById('drActivity');
+  if (act) act.remove();
+  const box = document.getElementById('drMsgs');
+  if (box) box.insertAdjacentHTML('beforeend', '<div class="dsh-msg thinking" id="drActivity"><span class="who">' + esc2(speaker || '成员') + '</span>⏳ 正在工作中 · 第 ' + (step || 1) + ' 步…</div>');
+  box.scrollTop = box.scrollHeight;
+}
+function drThinking(speaker, text) {
+  const box = document.getElementById('drMsgs');
+  if (!box || !text) return;
+  const n = document.querySelectorAll('.dsh-thinking').length + 1;
+  box.insertAdjacentHTML('beforeend', '<details class="dsh-thinking"><summary>🧠 ' + esc2(speaker || '成员') + ' 思考 #' + n + '</summary><div class="th-body">' + esc2(text) + '</div></details>');
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderDrMembers(participants) {
+  const box = document.getElementById('drMembers');
+  box.innerHTML = (participants || []).map(id => '<div class="dr-mem" data-id="' + esc2(id) + '"><div class="dm-name">' + esc2(id === 'user' ? '你' : id) + '</div><div class="dm-st">等待发言 ○</div></div>').join('');
+}
+function setDrSpeaker(agentId, state) {
+  const el = document.querySelector('#drMembers .dr-mem[data-id="' + agentId + '"]');
+  if (!el) return;
+  el.classList.toggle('speaking', state === 'speaking');
+  const st = el.querySelector('.dm-st');
+  if (st) st.textContent = state === 'speaking' ? '发言中 ●' : state === 'waiting' ? '等待 ○' : '已发言 ✓';
+}
+
+async function sendDiscussChat() {
+  const input = document.getElementById('drChatInput');
+  const text = (input.value || '').trim();
+  if (!text) return;
+  input.value = '';
+  try {
+    const resp = await fetch('/api/discuss/chat' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text })
+    });
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); alert('插话失败：' + (err.error || resp.status)); return; }
+    drAppend({ from: '你', text, ts: '' });
+  } catch (e) { alert('插话失败：' + e); }
+}
+function toggleDiscussLimit() {
+  const cur = document.getElementById('drLimitBtn').dataset.limit;
+  const next = cur === '3' ? null : 3;
+  fetch('/api/discuss/round-limit' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: next })
+  }).then(r => r.json()).then(s => updateDrLimitBtn(s.limit)).catch(() => {});
+}
+function updateDrLimitBtn(limit) {
+  const b = document.getElementById('drLimitBtn');
+  b.dataset.limit = limit || '';
+  b.textContent = limit ? '⏳ ' + limit + ' 轮后自动结束' : '三轮后结束讨论';
+  b.classList.toggle('active', !!limit);
+}
+async function stopDiscuss() {
+  await fetch('/api/discuss/stop' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), { method: 'POST' }).catch(() => {});
+}
+document.getElementById('drChatInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendDiscussChat(); });
+
 function openBoardModal() {
   const src = 'collab_board_nothing.html' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : '') + '&embed=1';
   document.getElementById('boardFrame').src = src;

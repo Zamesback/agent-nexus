@@ -2552,8 +2552,10 @@ def _dsh_verify_model(profile_name=DSH_PROFILE):
     except Exception as e:
         return False, f"模型校验异常：{e}"
 
-def _dsh_run(project, agent_id, dsh_input, session_id, emit):
-    """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)"""
+def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=False):
+    """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)
+    kill_after_final：讨论场景专用——收到 final（最终回复）即终止进程。
+    dsh 是 agent 循环，发言后不会自行退出；讨论只取观点，final 即本轮完成，不必等它收尾。"""
     import subprocess as _sp
     import time as _time
     _dsh_log("进入 _dsh_run: agent=%s sid=%s" % (agent_id, session_id))
@@ -2654,6 +2656,18 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit):
                         usage_agg[k] += u[k]
             if emit:
                 emit(ev)
+            if kill_after_final and ev.get("type") == "final":
+                # 讨论场景：最终回复已交付，立即终止进程（dsh 是 agent 循环，不会自行退出）
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    _wd_stop[0] = True
+                except Exception:
+                    pass
+                _dsh_log("讨论轮次：final 已交付，终止 pid=%s" % proc.pid)
+                break
         proc.wait(timeout=30)
         err = proc.stderr.read()[:800] if proc.stderr else ""
         if _wd_stop[0]:
@@ -2918,6 +2932,235 @@ def _handle_dsh_chat(self, project=None):
     emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
           "usage": usage, "total_usage": member_cfg.get("usage", {})})
 
+# ================= 讨论房间 v1（v2.20） =================
+# 主持人点名轮转：每次唤醒携带完整讨论记录 + 「先回应上一位」+ 可选「N 轮后结束」收敛提示。
+# 参与者仅托管进程（dsh）成员；用户可随时插话（进 history + 广播，不打断轮转）。
+_discuss_rooms = {}   # project -> room
+_discuss_subs = {}    # project -> [emit_fn,...]
+
+def _discuss_broadcast(project, ev):
+    """广播给该项目的所有 SSE 订阅者；写失败的订阅者移除"""
+    subs = _discuss_subs.get(project)
+    if not subs:
+        return
+    alive = []
+    for fn in subs:
+        try:
+            fn(ev)
+            alive.append(fn)
+        except Exception:
+            pass
+    _discuss_subs[project] = alive
+
+def _discuss_msg(project, room, frm, text):
+    msg = {"from": frm, "text": text, "ts": time.strftime("%H:%M:%S")}
+    room["history"].append(msg)
+    _discuss_broadcast(project, {"type": "discuss_msg", "msg": msg})
+    return msg
+
+def _discuss_prompt(room, member_id):
+    """构造唤醒消息：主题 + 完整讨论记录 + 回应上一家 + 收敛提示"""
+    lines = ["【讨论室 · %s】" % room.get("topic", "讨论")]
+    for m in room["history"]:
+        lines.append("%s：%s" % (m["from"], m["text"]))
+    lines.append("请先回应群里最近一位发言者的观点，再补充你自己的。")
+    lines.append("【讨论模式】这是观点讨论，不是执行任务：不要执行任何命令、不要调用任何工具、不要读取或修改任何文件数据；"
+                 "只发表你的观点，发言完毕后直接结束本轮，不要继续思考或执行后续步骤。")
+    if room.get("round_limit"):
+        lines.append("请尽量收敛观点，%d 轮后讨论将结束。" % room["round_limit"])
+    return "\n".join(lines)
+
+def _discuss_turn(project):
+    """单步轮转：取下一发言者 → 唤醒（全新会话，仅带 prompt 全文）→ 广播 → 判定结束"""
+    room = _discuss_rooms.get(project)
+    if not room or not room["active"]:
+        return False
+    names = room.get("member_names") or {}
+    parts = room["participants"]
+    idx = room["turn_idx"]
+    mid = None
+    for k in range(len(parts) * 2):
+        cand = parts[(idx + k) % len(parts)]
+        if cand != "user" and cand in names:
+            mid = cand
+            idx = idx + k + 1
+            break
+    if not mid:
+        room["active"] = False
+        _discuss_broadcast(project, {"type": "discuss_end", "reason": "no_speakers"})
+        return False
+    room["turn_idx"] = idx
+    room["busy"] = mid
+    room["round_count"] = room.get("round_count", 0) + 1
+    _discuss_broadcast(project, {"type": "discuss_status",
+                                 "speaker": mid, "name": names.get(mid, mid),
+                                 "round": room["round_count"]})
+    box = {"final": ""}
+    def emit(ev):
+        t = ev.get("type")
+        if t == "status" and ev.get("phase") == "step_start":
+            _discuss_broadcast(project, {"type": "discuss_activity", "speaker": mid, "step": ev.get("step")})
+        elif t == "thinking" and ev.get("text"):
+            _discuss_broadcast(project, {"type": "discuss_thinking", "speaker": mid, "text": ev["text"]})
+        elif t in ("text", "final") and ev.get("text"):
+            box["final"] = ev["text"]
+        elif t == "dsh_error":
+            _discuss_broadcast(project, {"type": "discuss_error", "speaker": mid, "error": ev.get("error")})
+    # 与 1:1 chat 共用成员锁；讨论每轮开全新会话（上下文由 prompt 全文保证，避免 session 历史膨胀/串味）
+    import threading as _dth
+    locks = globals().get("_DSH_LOCKS")
+    if locks is None:
+        globals()["_DSH_LOCKS"] = {}
+        locks = globals()["_DSH_LOCKS"]
+    with locks.setdefault(project + ":" + mid, _dth.Lock()):
+        ok, _new_sid, _usage = _dsh_run(project, mid, _discuss_prompt(room, mid), "", emit, kill_after_final=True)
+    room["busy"] = None
+    if ok and box["final"]:
+        _discuss_msg(project, room, names.get(mid, mid), box["final"])
+    else:
+        _discuss_broadcast(project, {"type": "discuss_error", "speaker": mid,
+                                     "error": "该成员本轮未产出回复（模型或进程异常），跳过。"})
+    if room.get("round_limit") and room["round_count"] >= room["round_limit"]:
+        room["active"] = False
+        room["end_reason"] = "round_limit"
+        _discuss_broadcast(project, {"type": "discuss_end", "reason": "round_limit"})
+        return False
+    return True
+
+def _discuss_loop(project):
+    while True:
+        room = _discuss_rooms.get(project)
+        if not room or not room["active"]:
+            return
+        if not _discuss_turn(project):
+            return
+        time.sleep(0.5)
+
+def _handle_discuss_common(self, project, with_start):
+    """start/resume 共用的 SSE 订阅逻辑：建房间（start）→ 注册订阅 → 快照 → 阻塞到结束"""
+    import threading as _dth
+    parsed = urlparse(self.path)
+    length = int(self.headers.get("Content-Length") or 0)
+    req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    board = load_board(project)
+    names = {}
+    for a in (board or {}).get("agents", []) or []:
+        names[a.get("id")] = a.get("name") or a.get("id")
+    if with_start:
+        participants = req.get("participants") or []
+        topic = (req.get("topic") or "讨论").strip()
+        valid = [p for p in participants if p in names and p != "user"]
+        if len(valid) < 2:
+            self._send_json({"ok": False, "error": "讨论需要至少 2 个可参与成员（托管进程成员）。"}, status=400)
+            return
+        proto = (board or {}).get("protocol") or {}
+        if proto.get("mode") == "off":
+            self._send_json({"ok": False, "error": "项目处于收工态，请先开工再发起讨论。"}, status=403)
+            return
+        if _discuss_rooms.get(project) and _discuss_rooms[project]["active"]:
+            self._send_json({"ok": False, "error": "已有讨论在进行中，请先结束当前讨论。"}, status=409)
+            return
+        room = {"topic": topic, "participants": valid, "history": [],
+                "turn_idx": 0, "round_count": 0, "round_limit": req.get("round_limit") or None,
+                "active": True, "busy": None, "end_reason": None, "member_names": names}
+        _discuss_rooms[project] = room
+        _discuss_msg(project, room, "你", "主题：" + topic)
+    else:
+        room = _discuss_rooms.get(project)
+        if not room or not room["active"]:
+            self._send_json({"ok": False, "error": "当前没有进行中的讨论。"}, status=404)
+            return
+    self.send_response(200)
+    self.send_header("Content-Type", "text/event-stream")
+    self.send_header("Cache-Control", "no-cache")
+    self.send_header("X-Accel-Buffering", "no")
+    self.end_headers()
+    subs = _discuss_subs.setdefault(project, [])
+    def emit(ev):
+        self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
+        self.wfile.flush()
+    subs.append(emit)
+    for m in room["history"]:
+        emit({"type": "discuss_msg", "msg": m})
+    emit({"type": "discuss_state", "topic": room.get("topic"), "participants": room["participants"],
+          "round_count": room.get("round_count", 0), "round_limit": room.get("round_limit")})
+    if with_start:
+        _dth.Thread(target=_discuss_loop, args=(project,), daemon=True).start()
+    # 阻塞保持连接直到讨论结束
+    try:
+        while _discuss_rooms.get(project) and _discuss_rooms[project]["active"]:
+            time.sleep(1)
+    finally:
+        r = _discuss_rooms.get(project)
+        emit({"type": "discuss_end", "reason": (r or {}).get("end_reason") or "ended"})
+        try:
+            if emit in subs:
+                subs.remove(emit)
+        except Exception:
+            pass
+
+def _handle_discuss_start(self, project=None):
+    """POST /api/discuss/start（SSE）：发起讨论并流式返回全过程"""
+    _handle_discuss_common(self, project, with_start=True)
+
+def _handle_discuss_resume(self, project=None):
+    """POST /api/discuss/resume（SSE）：讨论进行中重新订阅（刷新页面后恢复）"""
+    _handle_discuss_common(self, project, with_start=False)
+
+def _handle_discuss_stop(self, project=None):
+    """POST /api/discuss/stop：用户叫停，结束当前讨论"""
+    room = _discuss_rooms.get(project)
+    if room:
+        room["active"] = False
+        room["end_reason"] = "user_stop"
+    _discuss_broadcast(project, {"type": "discuss_end", "reason": "user_stop"})
+    _discuss_rooms.pop(project, None)
+    _discuss_subs.pop(project, None)
+    self._send_json({"ok": True})
+
+def _handle_discuss_round_limit(self, project=None):
+    """POST /api/discuss/round-limit：设置/取消「N 轮后结束」"""
+    length = int(self.headers.get("Content-Length") or 0)
+    req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    limit = req.get("limit")
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = None
+    room = _discuss_rooms.get(project)
+    if room:
+        room["round_limit"] = limit
+        _discuss_broadcast(project, {"type": "discuss_round_limit", "limit": limit})
+    self._send_json({"ok": True, "limit": limit})
+
+def _handle_discuss_chat(self, project=None):
+    """POST /api/discuss/chat：用户插话（广播进群，不打断轮转）"""
+    length = int(self.headers.get("Content-Length") or 0)
+    req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    text = (req.get("message") or "").strip()
+    room = _discuss_rooms.get(project)
+    if not room or not room["active"]:
+        self._send_json({"ok": False, "error": "当前没有进行中的讨论。"}, status=404)
+        return
+    if not text:
+        self._send_json({"ok": False, "error": "message 不能为空"}, status=400)
+        return
+    _discuss_msg(project, room, "你", text)
+    self._send_json({"ok": True})
+
+def _handle_discuss_state(self, project=None):
+    """GET /api/discuss/state：返回讨论房间当前状态（前端恢复用）"""
+    room = _discuss_rooms.get(project)
+    if not room:
+        self._send_json({"ok": True, "active": False})
+        return
+    self._send_json({"ok": True, "active": room["active"], "topic": room.get("topic"),
+                     "participants": room["participants"], "history": room["history"],
+                     "round_count": room.get("round_count", 0),
+                     "round_limit": room.get("round_limit"),
+                     "busy": room.get("busy")})
+
 class CollabHandler(SimpleHTTPRequestHandler):
     """协作看板请求处理器"""
 
@@ -2943,6 +3186,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 项目列表（多项目管理）
         if parsed.path == "/api/projects":
             self._send_json({"projects": list_projects(), "root": PROJECTS_ROOT})
+            return
+
+        # API: 讨论房间状态（v2.20）
+        if parsed.path == "/api/discuss/state":
+            _handle_discuss_state(self, project)
             return
 
         # API: Dashboard 聚合统计（v2.6）
@@ -3062,6 +3310,23 @@ class CollabHandler(SimpleHTTPRequestHandler):
         """处理 POST 请求"""
         parsed = urlparse(self.path)
         project = self._get_project()
+
+        # API: 讨论房间（v2.20：发起/恢复/叫停/三轮/插话）
+        if parsed.path == "/api/discuss/start":
+            _handle_discuss_start(self, project)
+            return
+        if parsed.path == "/api/discuss/resume":
+            _handle_discuss_resume(self, project)
+            return
+        if parsed.path == "/api/discuss/stop":
+            _handle_discuss_stop(self, project)
+            return
+        if parsed.path == "/api/discuss/round-limit":
+            _handle_discuss_round_limit(self, project)
+            return
+        if parsed.path == "/api/discuss/chat":
+            _handle_discuss_chat(self, project)
+            return
 
         # API: 终端 Agent 会话清空（v2.17）
         if parsed.path == "/api/dsh/history/clear":
