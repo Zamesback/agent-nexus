@@ -2527,12 +2527,16 @@ def _dsh_save_cfg(project, cfg):
     except Exception:
         pass
 
-def _dsh_verify_model(profile_name=DSH_PROFILE):
-    """启动前校验 profile 锁定的模型在白名单内（防误选昂贵模型）"""
+def _dsh_verify_model(project=None, profile_name=DSH_PROFILE):
+    """启动前校验 profile 锁定的模型在白名单内（防误选昂贵模型）
+    project 非空时同时挂上模型锁 overlay（--patch），与运行时一致——否则 dump-config
+    读到的是 profile 里可能残留的旧模型，显示会误导（实际运行以 --patch 为准）。"""
     try:
         import subprocess as _sp
-        out = _sp.run([DSH_NODE, DSH_CLI, "--profile", profile_name, "--dump-config"],
-                      capture_output=True, text=True, timeout=30)
+        cmd = [DSH_NODE, DSH_CLI, "--profile", profile_name, "--dump-config"]
+        if project:
+            cmd += ["--patch", _dsh_lock_patch(project)]
+        out = _sp.run(cmd, capture_output=True, text=True, timeout=30)
         cfg = out.stdout or ""
         model = None
         provider = None
@@ -2594,17 +2598,25 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                          encoding="utf-8", errors="replace", stdin=_sp.DEVNULL)
         _dsh_log("Popen ok pid=%s cmd0=%s" % (proc.pid, proc.args[0] if isinstance(proc.args, list) else ""))
         # v2.19.3：watchdog 超时终止——stdout 阻塞读时 wait(timeout) 永远到不了，
-        # 必须由独立线程在超时后 kill，stdout 才会 EOF、读取循环才能退出
+        # 必须由独立线程在超时后 kill，stdout 才会 EOF、读取循环才能退出。
+        # v2.20.2：改为空闲检测——最后事件后 180s 无任何进展才终止；
+        # 正常工作的长任务（持续发 status/tool_call/thinking）不再被固定 180s 误砍。
         _wd_stop = [False]
+        _last_evt = [time.time()]
         def _watchdog():
             try:
-                _time.sleep(180)
-                _wd_stop[0] = True
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                _dsh_log("dsh watchdog 180s 超时，已终止 pid=%s（交付已有回复）" % proc.pid)
+                while True:
+                    _time.sleep(20)
+                    if _wd_stop[0]:
+                        break
+                    if _time.time() - _last_evt[0] > 180:
+                        _wd_stop[0] = True
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        _dsh_log("dsh watchdog 空闲 180s 超时（最后事件后无进展），已终止 pid=%s" % proc.pid)
+                        break
             except Exception:
                 pass
         import threading as _wd_th
@@ -2642,6 +2654,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
             if _first_ev:
                 _first_ev = False
                 _dsh_log("dsh 首事件: %s" % raw[:80])
+            _last_evt[0] = time.time()  # v2.20.2：任何事件都算活跃，重置空闲计时
             try:
                 ev = json.loads(raw)
             except Exception:
@@ -2829,7 +2842,7 @@ def _handle_dsh_chat(self, project=None):
     # 1) 成员 profile（模板复制+身份替换）→ 模型白名单校验
     prof_dir = _dsh_ensure_profile(project, agent_id, member.get("name"), member.get("role"))
     prof_name = _dsh_profile_name(project, agent_id) if prof_dir else DSH_PROFILE_TEMPLATE
-    ok, msg = _dsh_verify_model(prof_name)
+    ok, msg = _dsh_verify_model(project, prof_name)
     _dsh_log("verify: ok=%s %s" % (ok, msg))
     if not ok:
         self._send_json({"ok": False, "error": msg}, status=403)
@@ -2893,11 +2906,11 @@ def _handle_dsh_chat(self, project=None):
     import threading as _th
     _dsh_locks = globals().get("_DSH_LOCKS")
     if _dsh_locks is None:
-        _DSH_LOCKS = {}
-        _dsh_locks = _DSH_LOCKS
+        globals()["_DSH_LOCKS"] = {}
+        _dsh_locks = globals()["_DSH_LOCKS"]
     lock = _dsh_locks.setdefault(project + ":" + agent_id, _th.Lock())
     with lock:
-        ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit)
+        ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=True)
         _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
         if not ok and session_id:
             # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
