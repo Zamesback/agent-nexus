@@ -1,3 +1,9 @@
+## v2.20.3 — Approval timeout + process-group cleanup
+
+- **Approval timeout**: the approval bridge (agentnexus-approval-bridge) already fails closed on its own after its `timeoutMs`, but 5 min was longer than the 180 s idle watchdog — so an unanswered approval got the process killed by the watchdog while it was legitimately waiting for a human decision. The bridge timeout is now 120 s (profile template + existing member profiles updated), so an unanswered approval auto-rejects quickly and the process resumes/ends without conflicting with the watchdog. Deny-by-default stays safe — no auto-approve.
+- **Process-group cleanup**: `_dsh_run` now spawns dsh with `start_new_session=True` and kills via `os.killpg` (process-group signal) before the per-pid kill fallback, so tool child processes (bash etc.) can't survive as orphans holding the session write handle. Verified: after final, 0 lingering processes.
+- Verified smoke: model back online (deepseek-v4.1-flash), simple chat returned "ok" with final persisted, kill_after_final terminated cleanly, 0 residuals.
+
 ## v2.20.2 — True per-member queuing + long-task watchdog fix
 
 - **Fixed (critical)**: the per-member lock was never actually shared — `_DSH_LOCKS = {}` was being assigned as a local variable inside each request thread, so every concurrent message got its own lock and the "queue" never existed. A follow-up message could kill the in-flight process mid-work (its reply lost). The lock is now stored on module globals, so consecutive messages to the same hosted member are truly serialized: the next one waits until the previous run finishes and persists, then starts with the full conversation history — old work is never interrupted mid-run, and the new process naturally inherits context (verified: a follow-up message repeated the previous round's conclusions from session memory).

@@ -15,6 +15,7 @@ import time
 import base64
 import threading
 import fcntl
+import signal
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -2595,7 +2596,8 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
     new_sid = session_id
     try:
         proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
-                         encoding="utf-8", errors="replace", stdin=_sp.DEVNULL)
+                         encoding="utf-8", errors="replace", stdin=_sp.DEVNULL,
+                         start_new_session=True)  # v2.20.3：独立进程组，杀进程时连带子进程
         _dsh_log("Popen ok pid=%s cmd0=%s" % (proc.pid, proc.args[0] if isinstance(proc.args, list) else ""))
         # v2.19.3：watchdog 超时终止——stdout 阻塞读时 wait(timeout) 永远到不了，
         # 必须由独立线程在超时后 kill，stdout 才会 EOF、读取循环才能退出。
@@ -2611,6 +2613,10 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                         break
                     if _time.time() - _last_evt[0] > 180:
                         _wd_stop[0] = True
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)  # v2.20.3：进程组级清理（含子进程）
+                        except Exception:
+                            pass
                         try:
                             proc.kill()
                         except Exception:
@@ -2639,6 +2645,10 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                             emit({"type": "dsh_error",
                                   "error": "模型服务暂不可用（上游 400）。请稍后重试，或在成员卡片右上角切换模型。"})
                         _wd_stop[0] = True
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)  # v2.20.3：进程组级清理（含子进程）
+                        except Exception:
+                            pass
                         try:
                             proc.kill()
                         except Exception:
@@ -2676,6 +2686,10 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
             if kill_after_final and ev.get("type") == "final":
                 # 讨论场景：最终回复已交付，立即终止进程（dsh 是 agent 循环，不会自行退出）
                 try:
+                    os.killpg(proc.pid, signal.SIGKILL)  # v2.20.3：进程组级清理（含子进程）
+                except Exception:
+                    pass
+                try:
                     proc.kill()
                 except Exception:
                     pass
@@ -2683,7 +2697,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                     _wd_stop[0] = True
                 except Exception:
                     pass
-                _dsh_log("讨论轮次：final 已交付，终止 pid=%s" % proc.pid)
+                _dsh_log("dsh final 已交付（kill_after_final），终止 pid=%s" % proc.pid)
                 break
         proc.wait(timeout=30)
         err = proc.stderr.read()[:800] if proc.stderr else ""
