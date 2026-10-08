@@ -1487,7 +1487,8 @@ function openPerson(agentId) {  const a = agentById[agentId];
         <div class="dsh-status">
           <span class="ok">● 进程托管在线</span><span class="dim">模型：<select id="dshModelSelect" class="dsh-model-select" onchange="changeDshModel(this)"></select></span>
           <span class="dim" id="dshUsage">用量：${fmtTokens(dshTotalTokens())}</span>
-          <button class="btn mini" id="apvSoundBtn" onclick="toggleApvSoundUI()" title="审批到达时响铃提醒（离开界面也能听见）" style="margin-left:auto;padding:2px 8px;font-size:11px;">${apvSoundEnabled() ? '🔔 提醒开' : '🔕 提醒关'}</button>
+          <button class="btn mini" id="awakeBtn" onclick="toggleAutoWakeUI()" title="被 @ 或被派工时自动唤醒本成员（headless 跑一轮，会消耗 token）" style="margin-left:auto;padding:2px 8px;font-size:11px;">${autoWakeOn ? '⚡ 自动唤醒' : '⛔ 唤醒关'}</button>
+          <button class="btn mini" id="apvSoundBtn" onclick="toggleApvSoundUI()" title="审批到达时响铃提醒（离开界面也能听见）" style="padding:2px 8px;font-size:11px;">${apvSoundEnabled() ? '🔔 提醒开' : '🔕 提醒关'}</button>
           <button class="btn mini" onclick="clearDshHistory()" style="padding:2px 8px;font-size:11px;">清空会话</button>
         </div>
         <div class="dsh-approval-list" id="dshApprovalList"></div>
@@ -1513,6 +1514,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
   if (msel) loadDshModel(msel);
   if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史（内部也会滚到底）
   if (isTerminalAgent(a)) loadArtifacts();   // v2.20.6：列出该成员写过的交付物（可就地预览）
+  if (isTerminalAgent(a)) loadAutoWake();    // v2.20.7：自动唤醒开关状态
 }
 function closePerson() { document.getElementById('personModal').classList.remove('show'); }
 
@@ -1959,6 +1961,39 @@ async function changeDshModel(sel) {
     if (!tip && status) { tip = document.createElement('span'); tip.id = 'dshModelTip'; tip.style.color = '#3fb950'; status.appendChild(tip); }
     if (tip) { tip.textContent = '✓ 已切换 · 下次消息生效'; setTimeout(() => { tip.textContent = ''; }, 6000); }
   } catch (e) { alert('切换失败：' + e.message); loadDshModel(sel); }
+}
+
+// ===== v2.20.7：托管成员自动唤醒开关 =====
+let autoWakeOn = true;
+async function loadAutoWake() {
+  try {
+    const r = await fetch('/api/dsh/auto-wake?project=' + encodeURIComponent(PROJECT));
+    const d = await r.json();
+    if (d && d.ok) autoWakeOn = !!d.enabled;
+  } catch (e) { /* 保持默认 */ }
+  syncAutoWakeBtn();
+}
+function syncAutoWakeBtn() {
+  const b = document.getElementById('awakeBtn');
+  if (b) {
+    b.textContent = autoWakeOn ? '⚡ 自动唤醒' : '⛔ 唤醒关';
+    b.title = autoWakeOn
+      ? '被 @ 或被派工时自动唤醒本成员（headless 跑一轮，会消耗 token）· 点击关闭'
+      : '自动唤醒已关闭 · 点击开启（被 @ 或被派工时自动跑一轮）';
+  }
+}
+async function toggleAutoWakeUI() {
+  const next = !autoWakeOn;
+  try {
+    const r = await fetch('/api/dsh/auto-wake?project=' + encodeURIComponent(PROJECT), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next })
+    });
+    const d = await r.json();
+    if (!d.ok) { alert(d.error || '切换失败'); return; }
+    autoWakeOn = !!d.enabled;
+  } catch (e) { alert('切换失败：' + e.message); return; }
+  syncAutoWakeBtn();
 }
 
 async function sendToTerminal() {

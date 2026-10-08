@@ -1747,8 +1747,9 @@ class ScheduleManager:
                 content = nmsg.get("content", "")
                 msg_type = nmsg.get("type", "text")
 
-                # 跳过系统消息和已处理的消息
-                if msg_type == "system":
+                # 跳过系统消息、自动唤醒回执（v2.20.7，切断唤醒反馈环）和已处理的消息
+                if msg_type in DSH_AUTO_WAKE_NO_WAKE_TYPES:
+                    self._processed_msg_ids.add(msg_id)
                     continue
                 if msg_id in self._processed_msg_ids:
                     continue
@@ -1941,6 +1942,11 @@ def trigger_agent_if_mentioned(msg, board_data, project=None):
                 )
                 t.start()
 
+        # v2.20.7：托管（dsh）成员的自动唤醒——被 @ / 被点名就真的动手
+        if (nmsg.get("type") or "text") not in DSH_AUTO_WAKE_NO_WAKE_TYPES:
+            for agent_id in mentioned:
+                trigger_dsh_wake(project, agent_id, nmsg, reason="看板消息 @ 点名")
+
         # ===== 以下为API模式自动触发（需要API配置）=====
         # 检查是否启用自动触发
         if not api_config.get("enabled", False) or not api_config.get("auto_trigger", False):
@@ -2033,6 +2039,236 @@ def _trigger_agent_worker(agent_id, agent_name, agent_role, trigger_msg_id):
             _append_agent_message(agent_id, agent_name, f"[自动触发异常] {str(e)}")
         except:
             pass
+
+
+# ===== v2.20.7：托管（dsh）成员自动唤醒 =====
+# 背景：引导词 / API / webhook 成员都能被 @ 唤醒，但托管成员此前只有两条唤醒路径——
+# ① 人类在成员卡聊天框手打；② 讨论室轮转。被 @、被派工时托管成员完全收不到。
+# 这里补上第三条路径：看板消息命中 @/to，或任务被指派给托管成员时，headless 跑一轮
+# _dsh_run，让它真的动手，并把结论写回看板。
+# 安全设计（防连锁爆炸）：
+#   · 默认开启，可按项目用 dsh.auto_wake=false 关掉；
+#   · 收工态（protocol.mode == "off"）不唤醒；
+#   · 自己触发自己不唤醒；
+#   · 同一成员同一时刻只允许一次自动唤醒（抢不到成员锁就放弃，不排队）；
+#   · 滚动窗口节流：成员 5 分钟内最多 3 次、项目 5 分钟内最多 8 次；
+#   · 自动唤醒写回看板的消息 type="auto_reply"，永不再次触发唤醒（切断直接反馈环）。
+DSH_AUTO_WAKE_DEFAULT = True
+DSH_AUTO_WAKE_WINDOW = 300.0
+DSH_AUTO_WAKE_AGENT_MAX = 3
+DSH_AUTO_WAKE_PROJECT_MAX = 8
+DSH_AUTO_WAKE_NO_WAKE_TYPES = ("system", "auto_reply")
+_DSH_WAKE_HISTORY = {}          # project -> [ts, ...]
+_DSH_WAKE_AGENT_HISTORY = {}    # (project, agent_id) -> [ts, ...]
+_DSH_WAKE_ACTIVE = set()        # (project, agent_id) 正在自动唤醒
+
+
+def _dsh_is_terminal_member(project, agent):
+    """成员是否托管（dsh）成员。v2.17.1 双字段兼容：entry.type 可能被 CLI onboard
+    覆写成 session，但顶层 entry_type=dsh 或已有 dsh 会话配置说明仍是托管成员。"""
+    if not isinstance(agent, dict):
+        return False
+    agent_id = agent.get("id") or ""
+    if not agent_id:
+        return False
+    if agent_id == "terminal":
+        return True
+    if (agent.get("entry") or {}).get("type") == "dsh":
+        return True
+    if agent.get("entry_type") == "dsh":
+        return True
+    if "终端" in (agent.get("role") or ""):
+        return True
+    mc = _dsh_member_cfg(project, agent_id) or {}
+    return bool(mc.get("session_id") or mc.get("usage"))
+
+
+def _dsh_auto_wake_enabled(project):
+    """项目是否开启托管成员自动唤醒（默认开）。"""
+    cfg = _dsh_load_cfg(project) or {}
+    dsh = cfg.get("dsh") or {}
+    v = dsh.get("auto_wake")
+    return DSH_AUTO_WAKE_DEFAULT if v is None else bool(v)
+
+
+def _dsh_auto_wake_set(project, enabled):
+    cfg = _dsh_load_cfg(project) or {}
+    dsh = cfg.get("dsh")
+    if not isinstance(dsh, dict):
+        dsh = {}
+    dsh["auto_wake"] = bool(enabled)
+    cfg["dsh"] = dsh
+    _dsh_save_cfg(project, cfg)
+    _auto_git_snapshot(project)
+    return bool(enabled)
+
+
+def _dsh_wake_allowed(project, agent_id):
+    """滚动窗口节流，返回 (allowed, reason)。"""
+    now = time.time()
+    win = DSH_AUTO_WAKE_WINDOW
+    ph = [t for t in _DSH_WAKE_HISTORY.get(project, []) if now - t < win]
+    ah = [t for t in _DSH_WAKE_AGENT_HISTORY.get((project, agent_id), []) if now - t < win]
+    if len(ph) >= DSH_AUTO_WAKE_PROJECT_MAX:
+        return False, "项目 %d 秒内自动唤醒已达上限 %d 次" % (int(win), DSH_AUTO_WAKE_PROJECT_MAX)
+    if len(ah) >= DSH_AUTO_WAKE_AGENT_MAX:
+        return False, "成员 %d 秒内自动唤醒已达上限 %d 次" % (int(win), DSH_AUTO_WAKE_AGENT_MAX)
+    ph.append(now)
+    ah.append(now)
+    _DSH_WAKE_HISTORY[project] = ph
+    _DSH_WAKE_AGENT_HISTORY[(project, agent_id)] = ah
+    return True, ""
+
+
+def trigger_dsh_wake(project, agent_id, source_msg, reason="被 @ 点名"):
+    """被 @ / 被派工时唤醒托管成员（异步，不阻塞调用方）。返回是否已启动。"""
+    try:
+        if not project:
+            return False
+        if not _dsh_auto_wake_enabled(project):
+            return False
+        board = load_board(project) or {}
+        if ((board.get("protocol") or {}).get("mode")) == "off":
+            _dsh_log("自动唤醒跳过：%s 处于收工态" % project)
+            return False
+        agent = next((a for a in board.get("agents", []) or [] if a.get("id") == agent_id), None)
+        if not agent or not _dsh_is_terminal_member(project, agent):
+            return False
+        nmsg = normalize_message(source_msg) if isinstance(source_msg, dict) else {}
+        sender = (nmsg.get("sender") or "").strip()
+        if sender and sender == agent_id:
+            return False
+        key = (project, agent_id)
+        if key in _DSH_WAKE_ACTIVE:
+            _dsh_log("自动唤醒跳过：%s 已在自动唤醒中" % agent_id)
+            return False
+        allowed, why = _dsh_wake_allowed(project, agent_id)
+        if not allowed:
+            _dsh_log("自动唤醒节流：%s / %s" % (agent_id, why))
+            return False
+        _DSH_WAKE_ACTIVE.add(key)
+        threading.Thread(target=_dsh_auto_wake_worker,
+                         args=(project, agent_id, dict(nmsg), reason), daemon=True).start()
+        return True
+    except Exception as e:
+        _dsh_log("自动唤醒异常: %s" % e)
+        return False
+
+
+def _dsh_auto_wake_prompt(project, sender_name, reason, content):
+    return (
+        "【自动唤醒】你在项目「%s」的看板里被点名了，请自行判断并行动。\n"
+        "触发方式：%s\n"
+        "触发者：%s\n"
+        "触发内容：\n%s\n\n"
+        "要求：\n"
+        "1) 先看看板上的相关任务与消息，判断这件事是否真的需要你出手；\n"
+        "2) 需要就动手做完（用你的工具写文件 / 改看板 / 更新任务状态），并把结论写回看板；\n"
+        "3) 不需要就用一句话说明原因，不要空转；\n"
+        "4) 不要在回复里 @ 其他成员来转派（自动唤醒有连锁上限），要转派就写进任务的 assignee。"
+    ) % (project, reason, sender_name, (content or "")[:1500])
+
+
+def _dsh_append_board_reply(project, agent_id, content, to=None):
+    """把托管成员的自动唤醒回复写回看板，type=auto_reply 以切断唤醒反馈环。"""
+    if not content:
+        return None
+    with board_lock:
+        data = load_board(project)
+        msgs = data.setdefault("messages", [])
+        new_id = max([int(m["id"]) for m in msgs if str(m.get("id", "")).isdigit()], default=0) + 1
+        msg = {
+            "id": new_id,
+            "sender": agent_id,
+            "content": content,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            "type": "auto_reply",
+            "auto_wake": True,
+        }
+        to_list = normalize_to_list(to)
+        if to_list:
+            msg["to"] = to_list
+        msgs.append(msg)
+        save_board(data, project)
+    # 标记为已处理，避免定时扫描器把它当成未处理的 @ 消息
+    try:
+        schedule_manager._processed_msg_ids.add(new_id)
+    except Exception:
+        pass
+    return new_id
+
+
+def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
+    """后台线程：抢成员锁 → headless 跑一轮 → 回复写回看板。"""
+    key = (project, agent_id)
+    try:
+        locks = globals().get("_DSH_LOCKS")
+        if locks is None:
+            globals()["_DSH_LOCKS"] = {}
+            locks = globals()["_DSH_LOCKS"]
+        lock = locks.setdefault(project + ":" + agent_id, threading.Lock())
+        if not lock.acquire(blocking=False):
+            _dsh_log("自动唤醒放弃：%s 正在处理其他消息（不排队）" % agent_id)
+            return
+        try:
+            board = load_board(project) or {}
+            agent = next((a for a in board.get("agents", []) or [] if a.get("id") == agent_id), None)
+            if not agent:
+                return
+            nmsg = normalize_message(source_msg) if isinstance(source_msg, dict) else {}
+            sender = (nmsg.get("sender") or "").strip()
+            sender_agent = next((a for a in board.get("agents", []) or [] if a.get("id") == sender), None)
+            sender_name = ("%s（%s）" % (sender_agent.get("name") or sender, sender)) if sender_agent else (sender or "看板")
+            prompt = _dsh_auto_wake_prompt(project, sender_name, reason, nmsg.get("content", ""))
+            member_cfg = _dsh_member_cfg(project, agent_id) or {}
+            session_id = member_cfg.get("session_id") or ""
+            _dsh_log("自动唤醒开始: project=%s agent=%s reason=%s 触发消息 id=%s type=%s sender=%s" % (
+                project, agent_id, reason, nmsg.get("id"), nmsg.get("type"), nmsg.get("sender")))
+            _dsh_append_history(project, agent_id, [{
+                "role": "user", "content": prompt, "auto_wake": True,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            }])
+            box = {"text": "", "persisted": False}
+
+            def emit(ev):
+                t = ev.get("type")
+                if t in ("text", "final") and ev.get("text"):
+                    box["text"] = ev["text"]
+                    if t == "final" and not box["persisted"]:
+                        box["persisted"] = True
+                        _dsh_append_history(project, agent_id, [{
+                            "role": "assistant", "content": ev["text"],
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                        }])
+
+            ok, new_sid, usage = _dsh_run(project, agent_id, prompt, session_id, emit, kill_after_final=True)
+            _dsh_log("自动唤醒结束: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
+            if not ok and session_id:
+                time.sleep(3)
+                ok, new_sid, usage = _dsh_run(project, agent_id, prompt, "", emit, kill_after_final=True)
+                _dsh_log("自动唤醒换新会话: ok=%s sid=%s" % (ok, new_sid))
+            if ok:
+                member_cfg["session_id"] = new_sid or session_id
+                u = member_cfg.setdefault("usage", {})
+                u["inputTokens"] = u.get("inputTokens", 0) + usage.get("inputTokens", 0)
+                u["outputTokens"] = u.get("outputTokens", 0) + usage.get("outputTokens", 0)
+                u["cacheReadTokens"] = u.get("cacheReadTokens", 0) + usage.get("cacheReadTokens", 0)
+                u["totalTokens"] = u.get("inputTokens", 0) + u.get("outputTokens", 0)
+                member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                _dsh_save_member_cfg(project, agent_id, member_cfg)
+            if box["text"] and not box["persisted"]:
+                _dsh_append_history(project, agent_id, [{
+                    "role": "assistant", "content": box["text"],
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                }])
+            if box["text"]:
+                _dsh_append_board_reply(project, agent_id, box["text"], to=[sender] if sender else None)
+        finally:
+            lock.release()
+    except Exception as e:
+        _dsh_log("自动唤醒失败: %s" % e)
+    finally:
+        _DSH_WAKE_ACTIVE.discard(key)
 
 
 def _append_agent_message(agent_id, agent_name, content):
@@ -3348,9 +3584,8 @@ def _handle_dsh_chat(self, project=None):
     entry_t = (member.get("entry") or {}).get("type", "")
     # v2.17.1：接入类型双字段兼容——entry.type 可能被 CLI onboard（8767）覆写为 session，
     # 但顶层 entry_type=dsh 或 dsh.members 有会话配置说明仍是终端托管成员
-    has_dsh_cfg = bool((_dsh_member_cfg(project, agent_id) or {}).get("session_id") or
-                       (_dsh_member_cfg(project, agent_id) or {}).get("usage"))
-    is_terminal_member = (agent_id == "terminal") or (entry_t == "dsh") or (member.get("entry_type") == "dsh") or                          ("终端" in (member.get("role") or "")) or has_dsh_cfg
+    # v2.20.7：判定逻辑抽到 _dsh_is_terminal_member，与自动唤醒共用同一口径
+    is_terminal_member = _dsh_is_terminal_member(project, member)
     if not is_terminal_member:
         self._send_json({"ok": False, "error": "成员 %s 不是终端托管成员（entry.type=%s），无法进行进程托管对话。" % (agent_id, entry_t or "无")}, status=400)
         return
@@ -3759,6 +3994,18 @@ class CollabHandler(SimpleHTTPRequestHandler):
             _handle_dsh_artifact(self, project)
             return
 
+        # API: 托管成员自动唤醒开关（v2.20.7）
+        if parsed.path == "/api/dsh/auto-wake":
+            self._send_json({
+                "ok": True,
+                "project": project,
+                "enabled": _dsh_auto_wake_enabled(project),
+                "window_seconds": int(DSH_AUTO_WAKE_WINDOW),
+                "agent_max": DSH_AUTO_WAKE_AGENT_MAX,
+                "project_max": DSH_AUTO_WAKE_PROJECT_MAX,
+            })
+            return
+
         # API: 获取看板数据
         if parsed.path == "/api/board":
             self._send_json(load_board(project))
@@ -3891,6 +4138,21 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 模型配置（v2.15.2）
         if parsed.path == "/api/dsh/model":
             _handle_dsh_model(self, project)
+            return
+
+        # API: 托管成员自动唤醒开关（v2.20.7）
+        if parsed.path == "/api/dsh/auto-wake":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            except Exception:
+                req = {}
+            if "enabled" not in req:
+                self._send_json({"ok": False, "error": "缺少 enabled"}, status=400)
+                return
+            en = _dsh_auto_wake_set(project, bool(req.get("enabled")))
+            _dsh_log("自动唤醒开关: project=%s enabled=%s" % (project, en))
+            self._send_json({"ok": True, "project": project, "enabled": en})
             return
 
         # API: 创建新项目（多项目管理）
@@ -4111,6 +4373,7 @@ class CollabHandler(SimpleHTTPRequestHandler):
         with board_lock:
             data = load_board(project)
             found = False
+            touched = None
             for task in data["tasks"]:
                 if str(task["id"]) == str(task_id):
                     # 允许更新的字段
@@ -4118,6 +4381,7 @@ class CollabHandler(SimpleHTTPRequestHandler):
                         if field in update:
                             task[field] = update[field]
                     task["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+                    touched = dict(task)
                     found = True
                     break
 
@@ -4133,6 +4397,18 @@ class CollabHandler(SimpleHTTPRequestHandler):
             + (f"（{update.get('progress', '?')}%）" if "progress" in update else ""),
             project
         )
+
+        # v2.20.7：任务被指派给托管（dsh）成员时自动唤醒，让它自己去认领/开工
+        try:
+            if touched and update.get("assignee") and (touched.get("status") or "todo") in ("todo", "in_progress"):
+                trigger_dsh_wake(project, update["assignee"], {
+                    "sender": update.get("sender") or "board",
+                    "content": "任务 %s 指派给你：%s（状态 %s）" % (
+                        task_id, touched.get("title") or touched.get("name") or "", touched.get("status") or "todo"),
+                    "type": "text",
+                }, reason="任务派工")
+        except Exception as e:
+            _dsh_log("派工自动唤醒异常: %s" % e)
 
         self._send_json({"ok": True, "task_id": task_id})
 
@@ -4174,8 +4450,8 @@ class CollabHandler(SimpleHTTPRequestHandler):
                 pass
             save_board(data, project)
 
-        # T3.2: 消息写入钩子 — 检测@提及，异步触发对应Agent
-        if new_msg.get("type") != "system":
+        # T3.2: 消息写入钩子 — 检测@提及，异步触发对应Agent（v2.20.7 含托管成员自动唤醒）
+        if (new_msg.get("type") or "text") not in DSH_AUTO_WAKE_NO_WAKE_TYPES:
             trigger_agent_if_mentioned(new_msg, data, project)
 
         self._send_json({"ok": True, "message_id": new_id})
