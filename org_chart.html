@@ -344,7 +344,7 @@
   }
   .modal-mask.show { display: flex; }
   .modal-mask.fullscreen { align-items: stretch; justify-content: stretch; padding: 0; }
-  .modal-mask.fullscreen .modal { width: 100%; max-width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; border: none; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-mask.fullscreen .modal, .modal-mask.fullscreen #personCard { width: 100%; max-width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; border: none; overflow: hidden; display: flex; flex-direction: column; }
   .modal-mask.fullscreen .person-body { flex: 1; min-height: 0; }
   .modal-mask.fullscreen .person-left { max-height: none; height: auto; flex-basis: 380px; }
   .modal-mask.fullscreen .person-right { height: auto; max-height: none; }
@@ -1142,8 +1142,13 @@ function renderSide() {
 }
 
 /* ===== 人卡浮层 ===== */
-function openPerson(agentId) {
-  const a = agentById[agentId];
+function scrollToBottom(el) {  // v2.20.4：滚到底（立即 + 字体加载后 + 布局稳定后兜底）
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+  try { document.fonts.ready.then(() => { el.scrollTop = el.scrollHeight; }); } catch (e) {}
+  setTimeout(() => { el.scrollTop = el.scrollHeight; }, 300);
+}
+function openPerson(agentId) {  const a = agentById[agentId];
   if (!a) return;
   currentDshAgent = isTerminalAgent(a) ? agentId : '';
   const st = agentStatus(agentId);
@@ -1237,9 +1242,11 @@ function openPerson(agentId) {
     </div>
     </div>`;
   document.getElementById('personModal').classList.add('show');
+  const cl = document.getElementById('chatList');       // v2.20.4：打开卡片滚到最近留言
+  scrollToBottom(cl);
   const msel = document.getElementById('dshModelSelect');
   if (msel) loadDshModel(msel);
-  if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史
+  if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史（内部也会滚到底）
 }
 function closePerson() { document.getElementById('personModal').classList.remove('show'); }
 
@@ -1355,6 +1362,7 @@ async function loadDshHistory() {
       const who = m.role === 'user' ? '你' : '终端 Agent';
       return `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(m.content || '')}</div>`;
     }).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
+    scrollToBottom(box);  // v2.20.4：打开卡片时滚动到最近消息
     if (usageEl) usageEl.textContent = '用量：' + fmtTokens(dshTotalTokens());
   } catch (e) {
     box.innerHTML = '<div class="work-empty" style="padding:10px 0;">历史加载失败：' + esc2(e.message) + '</div>';
