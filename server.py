@@ -2256,7 +2256,13 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
 
             ok, new_sid, usage = _dsh_run(project, agent_id, prompt, session_id, emit, kill_after_final=True)
             _dsh_log("自动唤醒结束: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
-            if not ok and session_id:
+            # v2.20.9：上游偶发 "Model is unavailable" 时，dsh 子进程仍会正常退出并发一个空的
+            # final，于是 _dsh_run 回报 ok=True 却一个字都没产出——唤醒就这样静默空转了。
+            # 「无输出」与「失败」一视同仁：换一个新会话重试一次（冷启动也重试——重试走的是
+            # 全新会话，本来就不依赖旧 session_id；旧守卫会让模型刚被换过时恰好跳过重试）。
+            if not ok or not box["text"]:
+                if not box["text"]:
+                    _dsh_log("自动唤醒本轮无输出（上游模型可能不可用），换新会话重试: project=%s agent=%s" % (project, agent_id))
                 time.sleep(3)
                 ok, new_sid, usage = _dsh_run(project, agent_id, prompt, "", emit, kill_after_final=True)
                 _dsh_log("自动唤醒换新会话: ok=%s sid=%s" % (ok, new_sid))
