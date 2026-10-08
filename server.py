@@ -2052,12 +2052,15 @@ def _trigger_agent_worker(agent_id, agent_name, agent_role, trigger_msg_id):
 #   · 自己触发自己不唤醒；
 #   · 同一成员同一时刻只允许一次自动唤醒（抢不到成员锁就放弃，不排队）；
 #   · 滚动窗口节流：成员 5 分钟内最多 3 次、项目 5 分钟内最多 8 次；
+#   · 只对「最近的」消息动手——定时扫描器（单项目遗留路径）可能翻出很久以前的 @，
+#     托管成员跑一轮是真花钱的，不能让历史消息在开关打开后集体复活；
 #   · 自动唤醒写回看板的消息 type="auto_reply"，永不再次触发唤醒（切断直接反馈环）。
 DSH_AUTO_WAKE_DEFAULT = True
 DSH_AUTO_WAKE_WINDOW = 300.0
 DSH_AUTO_WAKE_AGENT_MAX = 3
 DSH_AUTO_WAKE_PROJECT_MAX = 8
 DSH_AUTO_WAKE_NO_WAKE_TYPES = ("system", "auto_reply")
+DSH_AUTO_WAKE_RECENT = 20        # 触发消息必须落在看板最近 N 条消息内
 _DSH_WAKE_HISTORY = {}          # project -> [ts, ...]
 _DSH_WAKE_AGENT_HISTORY = {}    # (project, agent_id) -> [ts, ...]
 _DSH_WAKE_ACTIVE = set()        # (project, agent_id) 正在自动唤醒
@@ -2138,6 +2141,15 @@ def trigger_dsh_wake(project, agent_id, source_msg, reason="被 @ 点名"):
         sender = (nmsg.get("sender") or "").strip()
         if sender and sender == agent_id:
             return False
+        # 只认最近的看板消息：定时扫描器一旦启用会从头扫最近 100 条，
+        # 若不拦，开关打开瞬间历史 @ 会让托管成员集体跑一轮（真花钱）。
+        mid = nmsg.get("id")
+        if mid is not None:
+            recent_ids = [m.get("id") for m in (board.get("messages") or [])][-DSH_AUTO_WAKE_RECENT:]
+            if mid not in recent_ids:
+                _dsh_log("自动唤醒跳过：%s 的触发消息 id=%s 太旧（不在最近 %d 条内）"
+                         % (agent_id, mid, DSH_AUTO_WAKE_RECENT))
+                return False
         key = (project, agent_id)
         if key in _DSH_WAKE_ACTIVE:
             _dsh_log("自动唤醒跳过：%s 已在自动唤醒中" % agent_id)
