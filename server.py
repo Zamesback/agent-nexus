@@ -3287,6 +3287,17 @@ def _dsh_approval_state(request_id):
         return False, "该审批请求已超时自动拒绝", ent
     return True, "", ent
 
+def _dsh_run_cwd(project):
+    """v2.20.10：托管 Agent 的进程工作目录 = 该项目自己的数据目录。
+
+    以前 Popen 不带 cwd，子进程继承 server 的工作目录（launchd 里配的 AgentNexus 源码仓库根），
+    于是所有项目的托管 Agent 共享同一个 cwd，相对路径产物全落进源码仓库的 dsh_work/，跨项目
+    互相污染——一个临时测试项目的 Agent 会把文件写进 AgentNexus 自己的仓库。改成项目数据目录后，
+    每个项目的 Agent 各写各的；解析不到项目时返回 None（沿用继承 cwd，向后兼容）。"""
+    p = get_project_path(project)
+    return p if p and os.path.isdir(p) else None
+
+
 def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=False):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)
     kill_after_final：讨论场景专用——收到 final（最终回复）即终止进程。
@@ -3324,9 +3335,12 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
     cmd.append(dsh_input)
     usage_agg = {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "totalTokens": 0}
     new_sid = session_id
+    _run_cwd = _dsh_run_cwd(project)
+    _dsh_log("dsh 工作目录: %s" % (_run_cwd or "(继承 server cwd)"))
     try:
         proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
                          encoding="utf-8", errors="replace", stdin=_sp.DEVNULL,
+                         cwd=_run_cwd,
                          start_new_session=True)  # v2.20.3：独立进程组，杀进程时连带子进程
         _dsh_log("Popen ok pid=%s cmd0=%s" % (proc.pid, proc.args[0] if isinstance(proc.args, list) else ""))
         # v2.19.3：watchdog 超时终止——stdout 阻塞读时 wait(timeout) 永远到不了，
