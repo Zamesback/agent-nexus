@@ -1980,7 +1980,7 @@ def trigger_agent_if_mentioned(msg, board_data, project=None):
             # 启动后台线程，不阻塞HTTP响应
             t = threading.Thread(
                 target=_trigger_agent_worker,
-                args=(agent_id, agent_name, agent_role, trigger_msg_id),
+                args=(agent_id, agent_name, agent_role, trigger_msg_id, project),
                 daemon=True
             )
             t.start()
@@ -1989,12 +1989,13 @@ def trigger_agent_if_mentioned(msg, board_data, project=None):
         print(f"[T3.2] 触发Agent失败: {e}")
 
 
-def _trigger_agent_worker(agent_id, agent_name, agent_role, trigger_msg_id):
-    """T3.2: 后台线程worker，调用LLM并把回复写回看板"""
+def _trigger_agent_worker(agent_id, agent_name, agent_role, trigger_msg_id, project=None):
+    """T3.2: 后台线程worker，调用LLM并把回复写回看板
+    project: 项目名（v2.20.7 起调用方必须传，否则回复会落到服务目录的游离看板）"""
     try:
         # 读取最新看板数据
-        board_data = load_board()
-        config = load_config()
+        board_data = load_board(project)
+        config = load_config(project)
 
         # 找到触发消息
         trigger_msg = None
@@ -2008,16 +2009,16 @@ def _trigger_agent_worker(agent_id, agent_name, agent_role, trigger_msg_id):
         user_prompt = build_context_prompt(board_data, trigger_msg)
 
         # 调用LLM
-        result = call_llm(system_prompt, user_prompt, config_override=config)
+        result = call_llm(system_prompt, user_prompt, config_override=config, project=project)
 
         if not result.get("success"):
             error_msg = f"[自动触发失败] {result.get('error', '未知错误')}"
-            _append_agent_message(agent_id, agent_name, error_msg)
+            _append_agent_message(agent_id, agent_name, error_msg, project)
             return
 
         # T3.3: 解析回复中的动作并执行
         reply_content = result.get("content", "").strip()
-        pure_text, actions_executed = parse_and_execute_actions(reply_content, agent_id)
+        pure_text, actions_executed = parse_and_execute_actions(reply_content, agent_id, project)
 
         # 构建最终回复（纯文本 + 动作执行结果）
         final_reply = pure_text
@@ -2031,12 +2032,12 @@ def _trigger_agent_worker(agent_id, agent_name, agent_role, trigger_msg_id):
             final_reply += action_summary
 
         if final_reply.strip():
-            _append_agent_message(agent_id, agent_name, final_reply.strip())
+            _append_agent_message(agent_id, agent_name, final_reply.strip(), project)
 
     except Exception as e:
         print(f"[T3.2] Agent worker异常: {e}")
         try:
-            _append_agent_message(agent_id, agent_name, f"[自动触发异常] {str(e)}")
+            _append_agent_message(agent_id, agent_name, f"[自动触发异常] {str(e)}", project)
         except:
             pass
 
@@ -2283,10 +2284,11 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
         _DSH_WAKE_ACTIVE.discard(key)
 
 
-def _append_agent_message(agent_id, agent_name, content):
-    """把Agent的回复追加到看板消息中"""
+def _append_agent_message(agent_id, agent_name, content, project=None):
+    """把Agent的回复追加到看板消息中
+    project: 项目名。为 None 时走单项目向后兼容路径（服务目录下的看板）"""
     with board_lock:
-        data = load_board()
+        data = load_board(project)
         new_id = max([int(m["id"]) for m in data["messages"] if str(m.get("id", "")).isdigit()], default=0) + 1
         new_msg = {
             "id": new_id,
@@ -2297,15 +2299,17 @@ def _append_agent_message(agent_id, agent_name, content):
             "auto_triggered": True
         }
         data["messages"].append(new_msg)
-        save_board(data)
+        save_board(data, project)
 
 
 def _append_system_message(content, project=None):
     """T5.2: 追加系统通知消息（如API降级通知），独立于Agent回复
-    project: 项目名。为 None 时跳过写入（多项目模式下 load_board(None)
-    会落到服务 cwd 导致 FileNotFoundError 崩溃）"""
-    if not project:
-        print(f"[T5.2] 跳过系统消息（无 project 上下文）: {content[:60]}")
+    project: 项目名。为 None 时走单项目向后兼容路径；若该路径下的看板文件
+    不存在（多项目部署时服务目录没有看板），则跳过——否则会在服务目录里
+    凭空造出一个游离看板文件。"""
+    files = get_project_files(project)
+    if not os.path.exists(files["board_file"]):
+        print(f"[T5.2] 跳过系统消息（看板不存在: {files['board_file']}）: {content[:60]}")
         return
     with board_lock:
         data = load_board(project)
@@ -2325,8 +2329,9 @@ def _append_system_message(content, project=None):
 import re
 
 
-def parse_and_execute_actions(content, agent_id):
+def parse_and_execute_actions(content, agent_id, project=None):
     """T3.3: 解析Agent回复中的动作标记并执行，返回(纯文本, 执行结果列表)
+    project: 项目名，动作落到哪个看板（None 走单项目向后兼容路径）
 
     支持的动作格式：
     - [UPDATE_TASK id=xxx status=xxx progress=xxx assignee=xxx artifact=xxx note=xxx]
@@ -2347,7 +2352,7 @@ def parse_and_execute_actions(content, agent_id):
 
         task_id = attrs.get("id", "")
         if task_id:
-            result = _execute_update_task(task_id, attrs, agent_id)
+            result = _execute_update_task(task_id, attrs, agent_id, project)
             actions_executed.append(result)
 
     # 解析 [CLAIM_TASK ...]
@@ -2362,7 +2367,7 @@ def parse_and_execute_actions(content, agent_id):
 
         task_id = attrs.get("id", "")
         if task_id:
-            result = _execute_claim_task(task_id, agent_id)
+            result = _execute_claim_task(task_id, agent_id, project)
             actions_executed.append(result)
 
     # 去掉动作标记，保留纯文本
@@ -2373,11 +2378,11 @@ def parse_and_execute_actions(content, agent_id):
     return pure_text, actions_executed
 
 
-def _execute_update_task(task_id, attrs, agent_id):
+def _execute_update_task(task_id, attrs, agent_id, project=None):
     """执行UPDATE_TASK动作"""
     try:
         with board_lock:
-            data = load_board()
+            data = load_board(project)
             found = False
             for task in data["tasks"]:
                 if str(task["id"]) == str(task_id):
@@ -2394,18 +2399,18 @@ def _execute_update_task(task_id, attrs, agent_id):
                     found = True
                     break
             if found:
-                save_board(data)
+                save_board(data, project)
                 return {"action": "UPDATE_TASK", "task_id": task_id, "success": True, "attrs": attrs}
             return {"action": "UPDATE_TASK", "task_id": task_id, "success": False, "error": "任务不存在"}
     except Exception as e:
         return {"action": "UPDATE_TASK", "task_id": task_id, "success": False, "error": str(e)}
 
 
-def _execute_claim_task(task_id, agent_id):
+def _execute_claim_task(task_id, agent_id, project=None):
     """执行CLAIM_TASK动作"""
     try:
         with board_lock:
-            data = load_board()
+            data = load_board(project)
             found = False
             for task in data["tasks"]:
                 if str(task["id"]) == str(task_id):
@@ -2415,7 +2420,7 @@ def _execute_claim_task(task_id, agent_id):
                     found = True
                     break
             if found:
-                save_board(data)
+                save_board(data, project)
                 return {"action": "CLAIM_TASK", "task_id": task_id, "success": True, "assignee": agent_id}
             return {"action": "CLAIM_TASK", "task_id": task_id, "success": False, "error": "任务不存在"}
     except Exception as e:
@@ -2447,7 +2452,7 @@ def _log_api_call(result):
         print(f"[T5.3] 写调用日志失败: {e}")
 
 
-def call_llm(system_prompt, user_message, temperature=0.7, max_tokens=2000, config_override=None):
+def call_llm(system_prompt, user_message, temperature=0.7, max_tokens=2000, config_override=None, project=None):
     """调用LLM API（OpenAI兼容格式，支持DeepSeek/通义/OpenAI等）
 
     Args:
@@ -2481,7 +2486,7 @@ def call_llm(system_prompt, user_message, temperature=0.7, max_tokens=2000, conf
     }
 
     try:
-        config = config_override if config_override is not None else load_config()
+        config = config_override if config_override is not None else load_config(project)
         api_config = config.get("api_config", {})
 
         if not api_config.get("enabled"):
@@ -2563,19 +2568,19 @@ def call_llm(system_prompt, user_message, temperature=0.7, max_tokens=2000, conf
             error_type = "http_error"
             result["error"] = f"HTTP {e.code}: {error_body[:200]}"
         result["error_type"] = error_type
-        _record_api_error(result["error"], error_type, config, save=(config_override is None))
+        _record_api_error(result["error"], error_type, config, save=(config_override is None), project=project)
     except urllib.error.URLError as e:
         result["error"] = f"网络连接错误：无法连接到API服务器（{str(e.reason)}），请检查base_url和网络"
         result["error_type"] = "network_error"
-        _record_api_error(result["error"], "network_error", config, save=(config_override is None))
+        _record_api_error(result["error"], "network_error", config, save=(config_override is None), project=project)
     except TimeoutError:
         result["error"] = f"请求超时（{api_config.get('request_timeout', 60)}秒）：API响应太慢，请检查网络或增加超时时间"
         result["error_type"] = "timeout"
-        _record_api_error(result["error"], "timeout", config, save=(config_override is None))
+        _record_api_error(result["error"], "timeout", config, save=(config_override is None), project=project)
     except Exception as e:
         result["error"] = f"未知错误: {str(e)}"
         result["error_type"] = "unknown"
-        _record_api_error(result["error"], "unknown", config, save=(config_override is None))
+        _record_api_error(result["error"], "unknown", config, save=(config_override is None), project=project)
 
     result["elapsed"] = time.time() - start_time
     _log_api_call(result)
@@ -2603,7 +2608,7 @@ def _update_api_stats(result, config, save=True):
         print(f"更新统计失败: {e}")
 
 
-def _record_api_error(error_msg, error_type, config, save=True):
+def _record_api_error(error_msg, error_type, config, save=True, project=None):
     """记录API错误（内部函数），连续失败3次自动降级关闭auto_trigger
     save=False 时不写盘（用于测试连接的临时配置）"""
     try:
@@ -2627,7 +2632,8 @@ def _record_api_error(error_msg, error_type, config, save=True):
                         f"【API降级通知】API连续失败{stats['consecutive_failures']}次"
                         f"（最近错误：{error_type}：{str(error_msg)[:80]}），"
                         f"已自动关闭自动触发（auto_trigger=False）。看板手动模式不受影响，"
-                        f"请在「API 设置」中检查 key/base_url/model 后重新开启自动触发。"
+                        f"请在「API 设置」中检查 key/base_url/model 后重新开启自动触发。",
+                        project
                     )
                 except Exception as e:
                     print(f"[T5.2] 写入降级系统通知失败: {e}")
@@ -2635,7 +2641,7 @@ def _record_api_error(error_msg, error_type, config, save=True):
         api_config["stats"] = stats
         config["api_config"] = api_config
         if save:
-            save_config(config)
+            save_config(config, project)
     except Exception as e:
         print(f"记录错误失败: {e}")
 

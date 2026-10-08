@@ -18,7 +18,11 @@ import threading
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE_DIR)
+# server.py 在仓库根，不在 tests/ 下；只把 tests/ 放进 sys.path 会 ModuleNotFoundError。
+REPO_ROOT = os.path.dirname(BASE_DIR)
+for _p in (REPO_ROOT, BASE_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import server  # noqa: E402
 
