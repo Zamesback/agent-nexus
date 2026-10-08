@@ -344,7 +344,10 @@
   }
   .modal-mask.show { display: flex; }
   .modal-mask.fullscreen { align-items: stretch; justify-content: stretch; padding: 0; }
-  .modal-mask.fullscreen .modal { width: 100%; max-width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; border: none; }
+  .modal-mask.fullscreen .modal { width: 100%; max-width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; border: none; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-mask.fullscreen .person-body { flex: 1; min-height: 0; }
+  .modal-mask.fullscreen .person-left { max-height: none; height: auto; flex-basis: 380px; }
+  .modal-mask.fullscreen .person-right { height: auto; max-height: none; }
   .modal-mask.fullscreen .chat-box, .modal-mask.fullscreen .chat-box.dsh-box { flex: 1; min-height: 0; }
   .modal {
     width: 560px; max-height: 82vh; overflow-y: auto;
