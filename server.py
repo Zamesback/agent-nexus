@@ -3298,6 +3298,57 @@ def _dsh_run_cwd(project):
     return p if p and os.path.isdir(p) else None
 
 
+# v2.20.11：会话与工作目录绑定——dsh 拒绝在 A 目录录制、却从 B 目录恢复的会话
+#   dsh: session "..." was recorded in "A", not "B"
+# v2.20.10 把托管 Agent 的 cwd 从源码仓库改成了项目数据目录，于是所有改造前录制的会话
+# 都变成「目录对不上」，dsh 直接报错退出、一个字都不产出——用户看到的现象是 Agent 永久
+# 不回话（还要白等 180 秒 watchdog）。这里在起进程之前就识别出来，直接用新会话，不用等超时。
+DSH_SESSIONS_ROOT = os.path.join(os.path.expanduser("~"), ".dsh", "sessions")
+
+
+def _dsh_cwd_slug(cwd):
+    """复刻 dsh 的会话目录命名：去掉开头 '/'，其余 '/' → '-'，非 ASCII 字符 → '~XXXX'
+    （UTF-16 码元的大写十六进制），整体包在 '--' 里。
+
+    例：/Users/z/x/虚拟团队 → --Users-z-x-~865A~62DF~56E2~961F--
+    复刻错了也不会出事故：那只会让一个本来可用的会话被当成不可用 → 换新会话（丢记忆但仍能干活）。"""
+    rel = (cwd or "").replace("\\", "/").lstrip("/")
+    out = []
+    for ch in rel:
+        if ch == "/":
+            out.append("-")
+        elif ch.isascii():
+            out.append(ch)
+        else:
+            raw = ch.encode("utf-16-le")
+            out.append("".join("~%02X%02X" % (raw[i + 1], raw[i]) for i in range(0, len(raw), 2)))
+    return "--" + "".join(out) + "--"
+
+
+def _dsh_session_home(session_id):
+    """在 ~/.dsh/sessions/<slug>/ 下找出这个会话实际所在的目录，找不到返回 None。"""
+    if not session_id or not os.path.isdir(DSH_SESSIONS_ROOT):
+        return None
+    try:
+        for d in os.listdir(DSH_SESSIONS_ROOT):
+            p = os.path.join(DSH_SESSIONS_ROOT, d, session_id)
+            if os.path.isdir(p):
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _dsh_session_usable(session_id, cwd):
+    """这个会话能在 cwd 下恢复吗？（dsh 要求录制目录与恢复目录完全一致）"""
+    if not session_id or not cwd:
+        return True
+    home = _dsh_session_home(session_id)
+    if home is None:
+        return True  # 会话不存在 → dsh 会在当前目录新建，无需干预
+    return home == os.path.join(DSH_SESSIONS_ROOT, _dsh_cwd_slug(cwd), session_id)
+
+
 def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=False):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)
     kill_after_final：讨论场景专用——收到 final（最终回复）即终止进程。
@@ -3329,14 +3380,19 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
     dsh_input = ("【身份锚定】你是「%s」项目班子的「%s」（身份 ID：%s，%s）。"
                  "你不是团队中任何其他成员，不要以他人身份发言、认领或更新任务。\n\n%s"
                  % (project, m_name, agent_id, m_role, dsh_input))
+    _run_cwd = _dsh_run_cwd(project)
+    _dsh_log("dsh 工作目录: %s" % (_run_cwd or "(继承 server cwd)"))
+    # v2.20.11：会话与录制目录绑定。目录对不上时 dsh 直接报错退出、一个字都不产出，用户看到的是
+    # Agent 永久不回话（之外还要白等 180 秒 watchdog）。这里在起进程之前就把它丢掉，改用新会话。
+    if session_id and not _dsh_session_usable(session_id, _run_cwd):
+        _dsh_log("会话与当前工作目录不匹配，改用新会话: sid=%s cwd=%s" % (session_id, _run_cwd))
+        session_id = ""
     cmd = [DSH_NODE, DSH_CLI, "--profile", prof_name, "--patch", _lock_patch, "--json"]
     if session_id:
         cmd += ["--session-id", session_id]
     cmd.append(dsh_input)
     usage_agg = {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "totalTokens": 0}
     new_sid = session_id
-    _run_cwd = _dsh_run_cwd(project)
-    _dsh_log("dsh 工作目录: %s" % (_run_cwd or "(继承 server cwd)"))
     try:
         proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
                          encoding="utf-8", errors="replace", stdin=_sp.DEVNULL,
@@ -3374,6 +3430,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
         _wd.start()
         # v2.19.3：stderr 监控——模型错误/上游失败即时转发前端，不再静默卡住
         _err_flag = [False]
+        _sid_err = [False]  # v2.20.11：会话目录不匹配（由上层换新会话重试，不该白等 180s）
         def _stderr_reader():
             try:
                 for line in proc.stderr:
@@ -3382,6 +3439,24 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                         continue
                     _dsh_log("dsh stderr: %s" % line[:200])
                     low = line.lower()
+                    # v2.20.11：安全网——万一工作目录预检（_dsh_session_usable）没拦住，
+                    # 这里也不能让用户白等 180 秒才看到「什么都没发生」。
+                    if "was recorded in" in low:
+                        _sid_err[0] = True
+                        _dsh_log("dsh 拒绝恢复该会话（录制目录不同），立即终止并交由上层换新会话")
+                        if emit:
+                            emit({"type": "dsh_error",
+                                  "error": "这个成员的历史会话是在旧工作目录下录制的，无法恢复；已自动改用新会话。"})
+                        _wd_stop[0] = True
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)  # v2.20.3：进程组级清理（含子进程）
+                        except Exception:
+                            pass
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        continue
                     if ("model is unavailable" in low or "model_not_found" in low or
                             ("invalid_request" in low and "unavailable" in low)):
                         _err_flag[0] = True
@@ -3466,6 +3541,11 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
         proc.wait(timeout=30)
         err = proc.stderr.read()[:800] if proc.stderr else ""
         if _wd_stop[0]:
+            if _sid_err[0]:
+                # v2.20.11：会话目录不匹配——不是「超时但有回复」，而是「一个字都没有」。
+                # 返回 False，让上层（聊天/自动唤醒）按既有逻辑换新会话重试。
+                _dsh_log("dsh 会话录制目录不匹配，立即失败并交由上层换新会话")
+                return (False, new_sid, usage_agg)
             # v2.19.3：watchdog 超时终止——已有流式回复即视为已交付（final 已实时落盘）
             _dsh_log("dsh 会话超时终止（watchdog），交付已有回复")
             return (True, new_sid, usage_agg)
@@ -3700,14 +3780,18 @@ def _handle_dsh_chat(self, project=None):
     with lock:
         ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=True)
         _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
-        if not ok and session_id:
+        if (not ok or not _reply_box["text"]) and session_id:
             # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
+            # v2.20.11：与自动唤醒同一口径——「进程正常退出但一个字都没说」不算成功。
+            # 以前只看 ok，于是 dsh 因为会话目录不匹配等原因空转退出时，界面既没有回复
+            # 也没有报错，用户看到的就是「Agent 不理我了」。
             import time as _time
             _time.sleep(3)
             ok2, new_sid2, usage2 = _dsh_run(project, agent_id, dsh_input, session_id, emit)
             _dsh_log("占用重试: ok=%s sid=%s" % (ok2, new_sid2))
-            if not ok2:
-                ok3, new_sid3, usage3 = _dsh_run(project, agent_id, message, "", emit)
+            if not ok2 or not _reply_box["text"]:
+                # 换新会话；此时旧会话已不可用，把上下文一并带上（新会话没有记忆）
+                ok3, new_sid3, usage3 = _dsh_run(project, agent_id, dsh_input, "", emit)
                 _dsh_log("换新会话: ok=%s sid=%s" % (ok3, new_sid3))
                 if ok3:
                     ok, new_sid, usage = True, new_sid3, usage3
@@ -3734,6 +3818,11 @@ def _handle_dsh_chat(self, project=None):
             "usage": {k: usage.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadTokens", "totalTokens")},
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
         }])
+    if not ok and not _reply_box["text"]:
+        # v2.20.11：绝不让「一个字都没有」变成静默——用户至少要知道发生了什么
+        emit({"type": "dsh_error",
+              "error": "这一轮没有拿到任何回复（进程已终止）。可能是会话状态或上游模型异常；请再发一次，"
+                       "或在成员卡片右上角切换模型。"})
     emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
           "usage": usage, "total_usage": member_cfg.get("usage", {})})
 
