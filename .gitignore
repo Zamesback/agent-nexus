@@ -35,6 +35,8 @@ desktop.ini
 
 # 工作目录
 .workbuddy/
+# 终端托管 Agent 的临时工作目录（交付物本体；是否迁入项目数据仓库待定）
+dsh_work/
 
 # 环境变量
 .env

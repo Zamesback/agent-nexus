@@ -12,6 +12,14 @@
  *   3. resolve the waterfall with 'allowed-once' / 'rejected'
  *
  * Fails closed: timeout (default 5 min) or answer channel EOF -> rejected.
+ *
+ * v2.20.6 — timeout / late-answer visibility:
+ *   - on timeout, emit `agentnexus_approval_expired` so the board UI can retire
+ *     the stale card instead of leaving a live-looking button that lies.
+ *   - a late answer for a request this process already expired emits
+ *     `agentnexus_approval_late` (once) instead of being dropped silently.
+ *     Answers for *other* members' requests are ignored quietly — the answer
+ *     file is shared, and requestIds are globally unique.
  */
 'use strict'
 
@@ -24,8 +32,29 @@ function dbg(msg) {
   } catch (_e) {}
 }
 
+// v2.20.6: one NDJSON line to stdout — the host forwards these to the board UI.
+function emitEvent(obj) {
+  try {
+    process.stdout.write(JSON.stringify(obj) + '\n')
+    return true
+  } catch (_e) {
+    return false
+  }
+}
+
 let channelStarted = false
 const pending = new Map()
+// v2.20.6: requests this process timed out on — used to tell "late answer to my
+// expired request" apart from "answer to some other member's request".
+const expiredIds = new Set()
+
+function markExpired(requestId) {
+  expiredIds.add(requestId)
+  if (expiredIds.size > 50) {
+    const oldest = expiredIds.values().next().value
+    expiredIds.delete(oldest)
+  }
+}
 
 function ensureAnswerChannels(answerFile, timeoutMs) {
   if (channelStarted) return
@@ -60,7 +89,21 @@ function ensureAnswerChannels(answerFile, timeoutMs) {
           }
           if (!msg || msg.type !== 'agentnexus_approval_answer') continue
           const entry = pending.get(msg.requestId)
-          if (!entry) continue
+          if (!entry) {
+            // v2.20.6：迟到应答不能静默丢弃。只对「本进程超时过的请求」回报，
+            // 其余是共享应答文件里其他成员的请求，安静忽略。
+            if (expiredIds.has(msg.requestId)) {
+              expiredIds.delete(msg.requestId)
+              dbg('file answer IGNORED (request already expired): ' + msg.requestId)
+              emitEvent({
+                type: 'agentnexus_approval_late',
+                requestId: msg.requestId,
+                option: msg.option === 'allow' ? 'allow' : 'reject',
+                ts: Date.now()
+              })
+            }
+            continue
+          }
           pending.delete(msg.requestId)
           const outcome = msg.option === 'allow' ? 'allowed-once' : 'rejected'
           dbg('file answer accepted: ' + msg.requestId + ' -> ' + outcome)
@@ -85,7 +128,19 @@ function ensureAnswerChannels(answerFile, timeoutMs) {
     }
     if (!msg || msg.type !== 'agentnexus_approval_answer') return
     const entry = pending.get(msg.requestId)
-    if (!entry) return
+    if (!entry) {
+      if (expiredIds.has(msg.requestId)) {
+        expiredIds.delete(msg.requestId)
+        dbg('stdin answer IGNORED (request already expired): ' + msg.requestId)
+        emitEvent({
+          type: 'agentnexus_approval_late',
+          requestId: msg.requestId,
+          option: msg.option === 'allow' ? 'allow' : 'reject',
+          ts: Date.now()
+        })
+      }
+      return
+    }
     pending.delete(msg.requestId)
     const outcome = msg.option === 'allow' ? 'allowed-once' : 'rejected'
     dbg('stdin answer accepted: ' + msg.requestId + ' -> ' + outcome)
@@ -137,6 +192,7 @@ module.exports = function agentnexusApprovalBridge(ctx, config = {}) {
         (req && req.displayReason && req.displayReason.en) ||
         '',
       agentName,
+      timeoutMs,  // v2.20.6: UI 用它显示真实倒计时（不要再硬编码「5 分钟」）
       ts: Date.now(),
     }
     try {
@@ -149,7 +205,15 @@ module.exports = function agentnexusApprovalBridge(ctx, config = {}) {
     return await new Promise((resolve) => {
       const timer = setTimeout(() => {
         pending.delete(requestId)
+        markExpired(requestId)
         dbg('approval timed out (rejected): ' + requestId)
+        // v2.20.6：超时也要回报——否则前端卡片永远不知道自己已经失效
+        emitEvent({
+          type: 'agentnexus_approval_expired',
+          requestId,
+          timeoutMs,
+          ts: Date.now()
+        })
         resolve('rejected')
       }, timeoutMs)
       pending.set(requestId, {

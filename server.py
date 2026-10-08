@@ -10,6 +10,7 @@
 
 import json
 import os
+import re
 import sys
 import time
 import base64
@@ -682,10 +683,16 @@ def load_board(project=None):
 
 
 
-_LAST_GIT_COMMIT = {}
+# v2.20.6：数据仓库快照范围扩大——原先只提交 collab_board.json，
+# 导致模型/会话配置、聊天历史、交付物登记都不在回滚网内。
+AUTO_GIT_EXTRA_PATHS = ("project_config.json", "dsh_chat", "dsh_artifacts.json", "processed_msg_ids.json")
+_GIT_SNAP_LAST = {}
+
 
 def _auto_git_commit(board_file):
     """v2.14.2: 看板保存后自动 git 提交，每次写盘都留历史快照。
+    v2.20.6: 同一项目目录下的 project_config.json / dsh_chat/ / dsh_artifacts.json
+    也一并纳入提交，让配置、会话与聊天历史同样可回滚。
     若目录未纳入 git（无仓库/文件不在仓库内）则静默跳过。"""
     try:
         if not board_file:
@@ -695,11 +702,33 @@ def _auto_git_commit(board_file):
         if not abs_f.startswith(root + os.sep):
             return
         rel = os.path.relpath(abs_f, root)
+        proj_dir = os.path.dirname(rel)
+        targets = [rel]
+        for extra in AUTO_GIT_EXTRA_PATHS:
+            cand = os.path.join(proj_dir, extra) if proj_dir else extra
+            if os.path.exists(os.path.join(root, cand)):
+                targets.append(cand)
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         import subprocess as _sp
-        _sp.run(["git", "-C", root, "add", "--", rel], capture_output=True, timeout=15)
+        _sp.run(["git", "-C", root, "add", "--"] + targets, capture_output=True, timeout=20)
         _sp.run(["git", "-C", root, "commit", "-m", "board: %s %s" % (rel, now)],
-                capture_output=True, timeout=15)
+                capture_output=True, timeout=20)
+    except Exception:
+        pass
+
+
+def _auto_git_snapshot(project=None, min_interval=0.0):
+    """v2.20.6: 非看板写入路径（配置 / 聊天历史 / 交付物登记）也留快照。
+    min_interval>0 时对同一项目做节流，避免聊天历史逐条提交造成提交风暴；
+    被节流跳过的那次写盘仍在磁盘上，会在下一次看板/配置保存时一并入库。"""
+    try:
+        key = str(project or "")
+        now = time.time()
+        if min_interval > 0 and (now - _GIT_SNAP_LAST.get(key, 0)) < min_interval:
+            return
+        _GIT_SNAP_LAST[key] = now
+        files = get_project_files(project)
+        _auto_git_commit(files["board_file"])
     except Exception:
         pass
 
@@ -769,6 +798,7 @@ def save_config(data, project=None):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, config_file)
+    _auto_git_snapshot(project)   # v2.20.6：配置也留版本快照
 
 
 # ===== Agent 入口注册（T8.1）=====
@@ -1713,8 +1743,9 @@ class ScheduleManager:
             triggered_count = 0
             for msg in recent_messages:
                 msg_id = msg.get("id")
-                content = msg.get("content", "")
-                msg_type = msg.get("type", "text")
+                nmsg = normalize_message(msg)   # v2.20.6：兼容 Agent 手写字段族（from/body/ts/to）
+                content = nmsg.get("content", "")
+                msg_type = nmsg.get("type", "text")
 
                 # 跳过系统消息和已处理的消息
                 if msg_type == "system":
@@ -1723,7 +1754,7 @@ class ScheduleManager:
                     continue
 
                 # 检测是否包含@
-                mentioned = detect_mentions(content, agents)
+                mentioned = detect_mentions(content, agents, nmsg.get("to"))
                 if not mentioned:
                     self._processed_msg_ids.add(msg_id)
                     continue
@@ -1770,15 +1801,100 @@ class ScheduleManager:
 schedule_manager = ScheduleManager()
 
 
-def detect_mentions(content, agents):
-    """检测消息中@了哪些Agent，返回agent_id列表"""
+# ===== v2.20.6：消息字段兼容层 =====
+# messages[] 历史并存两种字段家族：
+#   ① server 写入族：sender / content / timestamp / to
+#   ② Agent 手写族：from / body|text / ts / to(字符串或数组)
+# 这里统一归一到 ①，未知字段一律保留（数据安全红线：不丢信息）。
+_MSG_SENDER_KEYS = ("sender", "from", "author", "agent", "agent_id", "by")
+_MSG_CONTENT_KEYS = ("content", "body", "text", "message", "note", "msg", "detail")
+_MSG_TIME_KEYS = ("timestamp", "ts", "time", "created_at", "createdAt", "at", "date")
+_MSG_TO_KEYS = ("to", "to_ids", "toIds", "recipients", "receiver")
+
+
+def _first_present(d, keys):
+    for k in keys:
+        v = d.get(k)
+        if v is not None and v != "":
+            return v
+    return None
+
+
+def normalize_to_list(to):
+    """to 统一成字符串列表：支持 str（空格/逗号分隔）、list、dict。"""
+    if to is None:
+        return []
+    if isinstance(to, str):
+        s = to.strip()
+        return [p for p in re.split(r"[,，;；\s]+", s) if p] if s else []
+    if isinstance(to, (list, tuple, set)):
+        out = []
+        for x in to:
+            if x is None:
+                continue
+            if isinstance(x, dict):
+                x = x.get("id") or x.get("name")
+            if x:
+                out.append(str(x))
+        return out
+    if isinstance(to, dict):
+        return [k for k, v in to.items() if v]
+    return [str(to)]
+
+
+def normalize_message(msg):
+    """把任意字段家族的消息归一成 server 写入族；未知字段原样保留。"""
+    if not isinstance(msg, dict):
+        return msg
+    out = dict(msg)
+    s = _first_present(msg, _MSG_SENDER_KEYS)
+    if isinstance(s, dict):
+        s = s.get("id") or s.get("name") or ""
+    if s is not None:
+        out["sender"] = str(s)
+    c = _first_present(msg, _MSG_CONTENT_KEYS)
+    if c is not None:
+        out["content"] = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
+    t = _first_present(msg, _MSG_TIME_KEYS)
+    if t is not None:
+        if isinstance(t, (int, float)):
+            secs = t / 1000.0 if t > 1e12 else float(t)
+            out["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00", time.localtime(secs))
+        else:
+            out["timestamp"] = str(t)
+    to = _first_present(msg, _MSG_TO_KEYS)
+    if to is not None:
+        out["to"] = normalize_to_list(to)
+    return out
+
+
+def detect_mentions(content, agents, to=None):
+    """检测消息@了哪些Agent，返回agent_id列表。
+
+    v2.20.6：除正文里的 @id / @姓名 之外，也认 `to` 字段（字符串或数组），
+    这样「派工」类消息不写 @ 也能命中对应成员。
+    """
     mentioned = []
-    if not content:
-        return mentioned
+    seen = set()
     for agent in agents:
         agent_id = agent.get("id", "")
-        agent_name = agent.get("name", "")
-        if f"@{agent_id}" in content or f"@{agent_name}" in content:
+        if not agent_id:
+            continue
+        agent_name = agent.get("name", "") or ""
+        hit = False
+        if content and (f"@{agent_id}" in content or (agent_name and f"@{agent_name}" in content)):
+            hit = True
+        if not hit and to:
+            for t in normalize_to_list(to):
+                bare = t.strip().lstrip("@")
+                if not bare:
+                    continue
+                if (bare == agent_id or (agent_name and bare == agent_name)
+                        or bare in ("all", "*", "所有人", "全员", "全体")):
+                    hit = True
+                    break
+        if hit and agent_id not in seen:
+            seen.add(agent_id)
             mentioned.append(agent_id)
     return mentioned
 
@@ -1791,12 +1907,13 @@ def trigger_agent_if_mentioned(msg, board_data, project=None):
         config = load_config(project)
         api_config = config.get("api_config", {})
 
-        # 检测@提及
+        # 检测@提及（v2.20.6：兼容 Agent 手写字段族，并认 to 字段）
         agents = board_data.get("agents", [])
-        mentioned = detect_mentions(msg.get("content", ""), agents)
+        nmsg = normalize_message(msg)
+        mentioned = detect_mentions(nmsg.get("content", ""), agents, nmsg.get("to"))
 
         # 排除自己@自己
-        sender = msg.get("sender", "")
+        sender = nmsg.get("sender", "") or msg.get("sender", "")
         mentioned = [a for a in mentioned if a != sender]
 
         if not mentioned:
@@ -2297,9 +2414,11 @@ DSH_NODE = _dsh_find_node()
 DSH_CLI = "/Users/zames/deepseek-harness/apps/cli/lib/bin.js"
 DSH_PROFILE = "sanguo-dsh"          # 三国指挥官专属 profile（锁 DeepSeek Flash + 看板协同指令）
 DSH_AGENT_ID = "terminal"           # 该会话在看板中的身份 ID
+# v2.20.6：日志路径可用环境变量覆盖，便于隔离测试不污染真实运行日志
+DSH_LOG_FILE = os.environ.get("AGENTNEXUS_DSH_LOG", "/tmp/dsh_server.log")
 def _dsh_log(msg):
     try:
-        with open("/tmp/dsh_server.log", "a", encoding="utf-8") as f:
+        with open(DSH_LOG_FILE, "a", encoding="utf-8") as f:
             f.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), msg))
     except Exception:
         pass
@@ -2444,6 +2563,8 @@ def _dsh_append_history(project, agent_id, entries):
         _os.replace(tmp, p)
     except Exception as e:
         _dsh_log("历史写入失败: %s" % e)
+        return
+    _auto_git_snapshot(project, min_interval=2.0)   # v2.20.6：聊天历史也留版本快照（节流 2s）
 
 def _dsh_clear_history(project, agent_id):
     import os as _os
@@ -2557,6 +2678,355 @@ def _dsh_verify_model(project=None, profile_name=DSH_PROFILE):
     except Exception as e:
         return False, f"模型校验异常：{e}"
 
+# ===== v2.20.6：交付物登记与预览 =====
+# 托管 Agent 写文件时会发 tool_call 事件（input 里带路径）。把 write/edit/present
+# 触碰到的路径记进 <项目>/dsh_artifacts.json，成员卡就能列出「这个 Agent 交付了什么」
+# 并直接预览——用户不必再去翻磁盘。
+# 安全：预览接口只放行登记表里出现过的路径，且必须落在允许的根目录内。
+DSH_ARTIFACT_TOOLS = {"write", "edit", "present", "create_file", "apply_patch",
+                      "str_replace", "multiedit", "notebookedit"}
+DSH_ARTIFACT_PATH_KEYS = ("path", "file_path", "filepath", "file", "target", "filename")
+DSH_ARTIFACT_MAX_PER_AGENT = 300
+DSH_ARTIFACT_MAX_BYTES = 40 * 1024 * 1024      # 单文件预览上限 40MB
+
+def _dsh_artifacts_file(project):
+    p = get_project_path(project)
+    return os.path.join(p, "dsh_artifacts.json") if p else None
+
+def _dsh_artifacts_load(project):
+    f = _dsh_artifacts_file(project)
+    if not f or not os.path.exists(f):
+        return {}
+    try:
+        with open(f, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _dsh_artifacts_save(project, data):
+    f = _dsh_artifacts_file(project)
+    if not f:
+        return
+    try:
+        tmp = f + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp, f)
+    except Exception as e:
+        _dsh_log("交付物登记写入失败: %s" % e)
+        return
+    _auto_git_snapshot(project, min_interval=10.0)   # v2.20.6：交付物登记也留快照（节流 10s）
+
+def _dsh_artifact_paths_from_input(inp):
+    """从 tool_call 的 input 里取出这次调用会写到的文件路径（相对/绝对都可能）"""
+    out = []
+    if not isinstance(inp, dict):
+        return out
+    for k in DSH_ARTIFACT_PATH_KEYS:
+        v = inp.get(k)
+        if isinstance(v, str) and v.strip():
+            out.append(v.strip())
+    # present / 批量写：files 或 paths 可能是字符串数组，也可能是 [{path: ...}]
+    for key in ("files", "paths"):
+        files = inp.get(key)
+        if isinstance(files, list):
+            for it in files:
+                if isinstance(it, str) and it.strip():
+                    out.append(it.strip())
+                elif isinstance(it, dict):
+                    for k in DSH_ARTIFACT_PATH_KEYS:
+                        v = it.get(k)
+                        if isinstance(v, str) and v.strip():
+                            out.append(v.strip())
+                            break
+    return out
+
+def _dsh_artifact_record(project, agent_id, tool, paths, cwd=None):
+    """把一次 tool_call 触碰到的路径登记到该成员名下（同路径去重、累加 count）"""
+    if not project or not agent_id or not paths:
+        return
+    base = cwd or BASE_DIR
+    data = _dsh_artifacts_load(project)
+    lst = data.get(agent_id)
+    if not isinstance(lst, list):
+        lst = []
+    lst = [e for e in lst if isinstance(e, dict)]
+    have = {}
+    for e in lst:
+        have[e.get("path")] = e
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    changed = False
+    for p in paths:
+        try:
+            ap = p if os.path.isabs(p) else os.path.join(base, p)
+            ap = os.path.abspath(ap)
+        except Exception:
+            continue
+        e = have.get(ap)
+        if e is not None:
+            e["ts"] = now
+            e["tool"] = tool
+            e["count"] = int(e.get("count") or 1) + 1
+        else:
+            e = {"path": ap, "tool": tool, "ts": now, "count": 1}
+            lst.append(e)
+            have[ap] = e
+        changed = True
+    if not changed:
+        return
+    lst.sort(key=lambda e: e.get("ts") or "")
+    data[agent_id] = lst[-DSH_ARTIFACT_MAX_PER_AGENT:]
+    _dsh_artifacts_save(project, data)
+
+def _dsh_artifact_roots(project):
+    """允许预览的根目录：①项目工作区 ②项目数据目录 ③AgentNexus 源码仓库"""
+    roots = []
+    try:
+        board = load_board(project) or {}
+        ws = ((board.get("project_info") or {}).get("workspace") or "").strip()
+        if ws:
+            roots.append(ws)
+    except Exception:
+        pass
+    p = get_project_path(project)
+    if p:
+        roots.append(p)
+    roots.append(BASE_DIR)
+    out = []
+    for r in roots:
+        try:
+            rp = os.path.realpath(r)
+            if rp not in out:
+                out.append(rp)
+        except Exception:
+            pass
+    return out
+
+def _dsh_artifact_allowed(project, agent_id, abspath):
+    """双条件放行：①在该 Agent 的登记表里 ②realpath 落在允许的根目录内"""
+    try:
+        rp = os.path.realpath(abspath)
+    except Exception:
+        return False, "路径无法解析"
+    lst = _dsh_artifacts_load(project).get(agent_id) or []
+    hit = False
+    for e in lst:
+        if not isinstance(e, dict):
+            continue
+        try:
+            if os.path.realpath(e.get("path") or "") == rp:
+                hit = True
+                break
+        except Exception:
+            continue
+    if not hit:
+        return False, "该文件不在这个成员的交付物登记里（只有 Agent 实际写过的文件才能预览）"
+    for root in _dsh_artifact_roots(project):
+        if rp == root or rp.startswith(root + os.sep):
+            return True, ""
+    return False, "路径不在允许预览的目录内"
+
+_DSH_ARTIFACT_EXT_KIND = {
+    "image": "png jpg jpeg gif webp bmp ico svg avif",
+    "markdown": "md markdown",
+    "pdf": "pdf",
+    "html": "html htm",
+    "video": "mp4 webm mov m4v ogv",
+    "audio": "mp3 wav ogg m4a flac aac opus",
+    "json": "json jsonl geojson",
+    "text": "txt log csv tsv yml yaml ini cfg toml env",
+    "code": ("js mjs cjs ts tsx jsx py rb go rs java c h cpp hpp cs swift kt php "
+             "sh bash zsh sql css scss less vue xml plist diff patch"),
+    "office": "docx xlsx pptx doc xls ppt",
+}
+
+def _dsh_artifact_kind(path):
+    ext = os.path.splitext(path or "")[1].lower().lstrip(".")
+    for kind, exts in _DSH_ARTIFACT_EXT_KIND.items():
+        if ext in exts.split():
+            return kind
+    return "other"
+
+def _dsh_artifact_list(project, agent_id=None):
+    data = _dsh_artifacts_load(project)
+    roots = _dsh_artifact_roots(project)
+    out = []
+    for aid, lst in data.items():
+        if agent_id and aid != agent_id:
+            continue
+        if not isinstance(lst, list):
+            continue
+        for e in lst:
+            if not isinstance(e, dict):
+                continue
+            p = e.get("path") or ""
+            item = {
+                "agentId": aid, "path": p, "name": os.path.basename(p),
+                "tool": e.get("tool") or "", "ts": e.get("ts") or "",
+                "count": int(e.get("count") or 1), "kind": _dsh_artifact_kind(p),
+                "rel": p, "exists": False, "size": 0, "mtime": 0,
+            }
+            # 用 realpath 比对（macOS 上 /var 与 /private/var 是同一处，直接前缀比较会漏）
+            try:
+                rp = os.path.realpath(p)
+            except Exception:
+                rp = p
+            for root in roots:
+                if rp == root or rp.startswith(root + os.sep):
+                    item["rel"] = os.path.relpath(rp, root)
+                    break
+            try:
+                st = os.stat(p)
+                item["exists"] = os.path.isfile(p)
+                item["size"] = st.st_size
+                item["mtime"] = st.st_mtime
+            except Exception:
+                pass
+            out.append(item)
+    out.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
+    return out
+
+def _handle_dsh_artifacts(self, project=None):
+    """GET /api/dsh/artifacts?project=X&agent=<id>：列出成员交付物登记（含存在性/大小/类型）"""
+    agent_id = (parse_qs(urlparse(self.path).query).get("agent") or [None])[0]
+    self._send_json({"ok": True, "artifacts": _dsh_artifact_list(project, agent_id)})
+
+_DSH_ARTIFACT_MIME = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
+    "webp": "image/webp", "bmp": "image/bmp", "ico": "image/x-icon", "svg": "image/svg+xml",
+    "avif": "image/avif", "pdf": "application/pdf", "html": "text/html; charset=utf-8",
+    "htm": "text/html; charset=utf-8", "mp4": "video/mp4", "webm": "video/webm",
+    "mov": "video/quicktime", "m4v": "video/x-m4v", "mp3": "audio/mpeg", "wav": "audio/wav",
+    "ogg": "audio/ogg", "m4a": "audio/mp4", "flac": "audio/flac", "aac": "audio/aac",
+    "json": "application/json; charset=utf-8", "jsonl": "application/x-ndjson",
+    "geojson": "application/geo+json", "txt": "text/plain; charset=utf-8",
+    "md": "text/plain; charset=utf-8", "csv": "text/csv; charset=utf-8",
+    "js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8",
+    "xml": "application/xml; charset=utf-8",
+}
+_DSH_ARTIFACT_TEXT_KINDS = {"markdown", "text", "code", "json", "html"}
+
+def _handle_dsh_artifact(self, project=None):
+    """GET /api/dsh/artifact?project=X&agent=<id>&path=<绝对路径>[&download=1]：预览/下载交付物"""
+    q = parse_qs(urlparse(self.path).query)
+    agent_id = (q.get("agent") or [""])[0]
+    path = (q.get("path") or [""])[0]
+    if not project or not agent_id or not path:
+        self._send_json({"ok": False, "error": "缺少 project / agent / path 参数"}, status=400)
+        return
+    ok, why = _dsh_artifact_allowed(project, agent_id, path)
+    if not ok:
+        self._send_json({"ok": False, "error": why}, status=403)
+        return
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        self._send_json({"ok": False, "error": "文件不存在或已被移动"}, status=404)
+        return
+    try:
+        size = os.path.getsize(real)
+    except Exception:
+        size = 0
+    if size > DSH_ARTIFACT_MAX_BYTES:
+        self._send_json({"ok": False, "error": "文件过大（%.1f MB），超出预览上限，请到磁盘直接打开"
+                                               % (size / 1048576.0)}, status=413)
+        return
+    ext = os.path.splitext(real)[1].lower().lstrip(".")
+    ctype = _DSH_ARTIFACT_MIME.get(ext)
+    if not ctype:
+        ctype = ("text/plain; charset=utf-8"
+                 if _dsh_artifact_kind(real) in _DSH_ARTIFACT_TEXT_KINDS
+                 else "application/octet-stream")
+    try:
+        with open(real, "rb") as fh:
+            body = fh.read()
+    except Exception as e:
+        self._send_json({"ok": False, "error": "读取失败：%s" % e}, status=500)
+        return
+    self.send_response(200)
+    self.send_header("Content-Type", ctype)
+    self.send_header("Content-Length", str(len(body)))
+    self.send_header("Access-Control-Allow-Origin", "*")
+    self.send_header("Cache-Control", "no-store")
+    if (q.get("download") or [""])[0] in ("1", "true", "yes"):
+        fn = os.path.basename(real).replace('"', "")
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % fn)
+    self.end_headers()
+    self.wfile.write(body)
+
+# ===== v2.20.6：审批请求活跃表 =====
+# 桥接超时后，应答文件里仍可能落下一条「批准」。旧行为是照单写入、前端显示
+# 「✓ 已批准，继续执行」——而 Agent 其实早已按「拒绝」继续。这里记录每个请求的
+# 存活状态，让 _handle_dsh_approve 能如实拒绝迟到应答。
+_DSH_APPROVALS = {}          # request_id -> {project, agent_id, ts, timeoutMs, expired, resolved}
+_DSH_APPROVAL_GRACE = 3.0    # 秒：桥接超时与用户点击之间的竞态余量
+
+def _dsh_approvals_prune():
+    """条目超过 64 个时清理 10 分钟前的记录，避免无限增长"""
+    if len(_DSH_APPROVALS) < 64:
+        return
+    cutoff = time.time() - 600
+    for k in [k for k, v in _DSH_APPROVALS.items() if v.get("ts", 0) < cutoff]:
+        _DSH_APPROVALS.pop(k, None)
+
+def _dsh_approval_register(request_id, project, agent_id, timeout_ms,
+                           tool_name="", reason=""):
+    """dsh 发出审批请求时登记（同一条路径已把 approval 事件推给前端）"""
+    if not request_id:
+        return
+    _dsh_approvals_prune()
+    _DSH_APPROVALS[request_id] = {
+        "project": project, "agent_id": agent_id, "ts": time.time(),
+        "timeoutMs": timeout_ms if isinstance(timeout_ms, (int, float)) else 0,
+        "toolName": tool_name or "", "reason": reason or "",
+        "expired": False, "resolved": False,
+    }
+
+def _dsh_approval_pending(project=None):
+    """v2.20.6：列出仍待用户批准的请求——供任意页面轮询提醒（人不在组织架构页也能被叫回来）"""
+    out = []
+    now = time.time()
+    for rid in list(_DSH_APPROVALS.keys()):
+        live, _why, ent = _dsh_approval_state(rid)
+        if not live or ent is None:
+            continue
+        if project and ent.get("project") and ent.get("project") != project:
+            continue
+        tmo = float(ent.get("timeoutMs") or 0)
+        remaining = int(max(0, tmo - (now - ent.get("ts", now)))) if tmo > 0 else 0
+        out.append({
+            "requestId": rid,
+            "project": ent.get("project") or "",
+            "agentId": ent.get("agent_id") or "",
+            "toolName": ent.get("toolName") or "",
+            "reason": ent.get("reason") or "",
+            "timeoutMs": tmo,
+            "remainingMs": remaining * 1000,
+            "ts": ent.get("ts", 0),
+        })
+    out.sort(key=lambda x: x.get("ts", 0))
+    return out
+
+def _dsh_approval_expire(request_id):
+    ent = _DSH_APPROVALS.get(request_id)
+    if ent:
+        ent["expired"] = True
+
+def _dsh_approval_state(request_id):
+    """返回 (live, reason, entry)：live=False 时 reason 说明为何不能应答"""
+    ent = _DSH_APPROVALS.get(request_id)
+    if not ent:
+        return False, "该审批请求不存在或已结束", None
+    if ent.get("resolved"):
+        return False, "该审批请求已经处理过", ent
+    if ent.get("expired"):
+        return False, "该审批请求已超时自动拒绝", ent
+    tmo = float(ent.get("timeoutMs") or 0)
+    if tmo > 0 and (time.time() - ent.get("ts", 0)) > (tmo + _DSH_APPROVAL_GRACE):
+        ent["expired"] = True
+        return False, "该审批请求已超时自动拒绝", ent
+    return True, "", ent
+
 def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=False):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)
     kill_after_final：讨论场景专用——收到 final（最终回复）即终止进程。
@@ -2657,6 +3127,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                 pass
         _wd_th.Thread(target=_stderr_reader, daemon=True).start()
         _first_ev = True
+        _dsh_cwd = [None]   # v2.20.6：session 事件里的 cwd，用于把相对交付路径解析成绝对路径
         for raw in proc.stdout:
             raw = raw.strip()
             if not raw:
@@ -2669,13 +3140,32 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                 ev = json.loads(raw)
             except Exception:
                 continue
-            if ev.get("type") == "session" and ev.get("sessionId"):
-                new_sid = ev["sessionId"]
+            if ev.get("type") == "session":
+                if ev.get("sessionId"):
+                    new_sid = ev["sessionId"]
+                if ev.get("cwd"):
+                    _dsh_cwd[0] = ev["cwd"]
             # v2.18：审批桥内部事件 → 前端审批事件（挂起等待用户批准，dsh 进程阻塞等待应答文件）
+            # v2.20.6：登记活跃请求，并转发「超时 / 迟到」事件——前端据此让卡片失效
             if ev.get("type") == "agentnexus_approval":
+                _dsh_approval_register(ev.get("requestId"), project, agent_id,
+                                       ev.get("timeoutMs"), ev.get("toolName"), ev.get("reason"))
                 ev["type"] = "approval"
+            elif ev.get("type") == "agentnexus_approval_expired":
+                _dsh_approval_expire(ev.get("requestId"))
+                ev["type"] = "approval_expired"
+                _dsh_log("审批超时（桥接回报）: request=%s" % ev.get("requestId"))
+            elif ev.get("type") == "agentnexus_approval_late":
+                ev["type"] = "approval_late"
+                _dsh_log("审批迟到（桥接回报，已忽略）: request=%s option=%s"
+                         % (ev.get("requestId"), ev.get("option")))
             elif ev.get("type") in ("agentnexus_bridge_loaded",):
                 continue
+            # v2.20.6：交付物登记——write/edit/present 类工具触碰的路径记进成员名下，供预览
+            elif ev.get("type") == "tool_call" and ev.get("tool") in DSH_ARTIFACT_TOOLS:
+                _dsh_artifact_record(project, agent_id, ev.get("tool"),
+                                     _dsh_artifact_paths_from_input(ev.get("input")),
+                                     _dsh_cwd[0])
             u = ev.get("usage")
             if isinstance(u, dict):
                 for k in usage_agg:
@@ -2820,9 +3310,20 @@ def _handle_dsh_approve(self, project=None):
         self._send_json({"ok": False,
                          "error": "参数错误：需要 requestId + option(allow/reject)"}, status=400)
         return
+    # v2.20.6：先判存活——超时后的「批准」必须如实拒绝，不能写进应答文件让前端以为成功。
+    # Agent 在超时那一刻已按「拒绝」继续，此时再放行也无法挽回本轮。
+    live, reason, _ent = _dsh_approval_state(request_id)
+    if not live:
+        _dsh_log("审批应答被拒（%s）: request=%s option=%s" % (reason, request_id, option))
+        self._send_json({"ok": False, "stale": True, "requestId": request_id,
+                         "error": reason + "——Agent 已按「拒绝」继续本轮，批准不再生效。"
+                                           "请重新触发该操作后再批准。"}, status=409)
+        return
     if not _dsh_approve_answer(request_id, option):
         self._send_json({"ok": False, "error": "应答写入失败，请稍后重试"}, status=500)
         return
+    if _ent is not None:
+        _ent["resolved"] = True
     _dsh_log("审批应答: request=%s option=%s" % (request_id, option))
     self._send_json({"ok": True, "requestId": request_id, "option": option})
 
@@ -3245,6 +3746,19 @@ class CollabHandler(SimpleHTTPRequestHandler):
             _handle_dsh_history(self, project)
             return
 
+        # API: 待批准的权限请求（v2.20.6）——任意页面轮询它来响铃提醒
+        if parsed.path == "/api/dsh/approvals":
+            self._send_json({"ok": True, "approvals": _dsh_approval_pending(project)})
+            return
+
+        # API: 交付物登记与预览（v2.20.6）——托管 Agent 写过的文件，成员卡里直接看
+        if parsed.path == "/api/dsh/artifacts":
+            _handle_dsh_artifacts(self, project)
+            return
+        if parsed.path == "/api/dsh/artifact":
+            _handle_dsh_artifact(self, project)
+            return
+
         # API: 获取看板数据
         if parsed.path == "/api/board":
             self._send_json(load_board(project))
@@ -3632,7 +4146,9 @@ class CollabHandler(SimpleHTTPRequestHandler):
             self._send_error(400, "Invalid JSON")
             return
 
-        if "sender" not in msg or "content" not in msg:
+        # v2.20.6：字段族兼容——既收 sender/content/timestamp，也收 from/body|text/ts
+        norm = normalize_message(msg)
+        if not norm.get("sender") or not norm.get("content"):
             self._send_error(400, "Missing sender or content")
             return
 
@@ -3641,15 +4157,19 @@ class CollabHandler(SimpleHTTPRequestHandler):
             new_id = max([int(m["id"]) for m in data["messages"] if str(m.get("id", "")).isdigit()], default=0) + 1
             new_msg = {
                 "id": new_id,
-                "sender": msg["sender"],
-                "content": msg["content"],
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
-                "type": msg.get("type", "text")
+                "sender": norm["sender"],
+                "content": norm["content"],
+                "timestamp": norm.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+                "type": norm.get("type", "text")
             }
+            # v2.20.6：保留收件人（原先被丢弃，导致派工/@目标信息丢失）
+            to_list = norm.get("to") or []
+            if to_list:
+                new_msg["to"] = to_list
             data["messages"].append(new_msg)
             # v2.13.7: TaskPlan 待办清单自动同步（就地写任务+系统消息）
             try:
-                sync_tasks_from_taskplan(data, msg.get("sender"), msg.get("content", ""))
+                sync_tasks_from_taskplan(data, new_msg["sender"], new_msg["content"])
             except Exception:
                 pass
             save_board(data, project)

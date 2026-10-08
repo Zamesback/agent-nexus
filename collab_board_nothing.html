@@ -1826,11 +1826,41 @@ async function loadConfig() {
   }
 }
 
+// ===== 消息兼容层（v2.20.6）=====
+// messages[] 历史并存两种字段家族：server 写入族 sender/content/timestamp，
+// 以及 Agent 手写族 from/body|text/ts（to 可能是数组）。此处归一，避免消息空白。
+const MSG_SENDER_KEYS = ['sender', 'from', 'author', 'agent', 'agent_id', 'agentId', 'by'];
+const MSG_CONTENT_KEYS = ['content', 'body', 'text', 'message', 'note', 'msg', 'detail'];
+const MSG_TIME_KEYS = ['timestamp', 'ts', 'time', 'created_at', 'createdAt', 'at', 'date'];
+function _msgPick(m, keys) { for (const k of keys) { const v = m[k]; if (v != null && v !== '') return v; } return undefined; }
+function _msgSender(m) { const v = _msgPick(m, MSG_SENDER_KEYS); return v == null ? '' : String(typeof v === 'object' ? (v.id || v.name || '') : v); }
+function _msgContent(m) { const v = _msgPick(m, MSG_CONTENT_KEYS); if (v == null) return ''; if (typeof v === 'string') return v; try { return JSON.stringify(v); } catch (e) { return String(v); } }
+function _msgTime(m) {
+  const v = _msgPick(m, MSG_TIME_KEYS);
+  if (v == null) return '';
+  if (typeof v === 'number') { const d = new Date(v < 1e12 ? v * 1000 : v); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 19).replace('T', ' '); }
+  return String(v);
+}
+function _msgTo(m) {
+  const v = _msgPick(m, ['to', 'to_ids', 'toIds', 'recipients', 'receiver']);
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.filter(x => x != null && x !== '').map(x => String(typeof x === 'object' ? (x.id || x.name || '') : x)).filter(Boolean);
+  if (typeof v === 'object') return Object.keys(v).filter(k => v[k]);
+  return String(v).split(/[,，;；\s]+/).filter(Boolean);
+}
+function normalizeMessages(list) {
+  return (list || []).map(m => {
+    if (!m || typeof m !== 'object') return m;
+    return Object.assign({}, m, { sender: _msgSender(m), content: _msgContent(m), timestamp: _msgTime(m), _toList: _msgTo(m) });
+  });
+}
+
 // ===== 数据加载 =====
 async function loadBoard() {
   try {
     const resp = await fetch('/api/board');
     boardData = await resp.json();
+    boardData.messages = normalizeMessages(boardData.messages);
     renderBoard();
     renderChat();
     renderStats();
@@ -2846,6 +2876,7 @@ async function sendMessage() {
           if (newMsgs > 0) {
             hideThinking();
             boardData = data;
+            boardData.messages = normalizeMessages(boardData.messages);
             renderChat();
           } else if (Date.now() < deadline) {
             setTimeout(poll, 800);
@@ -2970,5 +3001,6 @@ function initTheme() {
 // ===== 启动（置于 const 声明之后，避免 TDZ）=====
 init();
 </script>
+<script src="/approval_alert.js"></script>
 </body>
 </html>
