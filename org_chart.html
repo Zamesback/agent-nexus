@@ -449,6 +449,12 @@
   .modal-role { font-size: 12px; color: var(--dim); margin-top: 2px; }
   .modal-close { margin-left: auto; cursor: pointer; color: var(--dim); font-size: 18px; border: none; background: none; }
   .modal-close:hover { color: var(--text); }
+  /* 人卡头部有两个按钮（全屏 / 关闭）。两个 .modal-close 各带 margin-left:auto 会把
+     剩余空白对半分，于是全屏键飘在中间、关闭键贴在右边，看着像错位。把它们包成一组，
+     由这一组占住 auto 边距，两个按钮就并排贴在右上角了。 */
+  .modal-head-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+  .modal-head-actions .modal-close { margin-left: 0; padding: 0 6px; line-height: 1; }
+  .modal-head-actions .modal-close:hover { color: var(--text); }
   .modal-sec { padding: 14px 20px; border-bottom: 1px solid var(--line); }
   .modal-sec-title { font-size: 11px; font-family: var(--mono); letter-spacing: 1px; color: var(--dim-2); margin-bottom: 10px; }
   .work-item {
@@ -506,6 +512,10 @@
 
   /* ===== 终端会话（dsh 进程托管）===== */
   .dsh-status { font-size: 11px; font-family: var(--mono); color: var(--dim-2); margin: 6px 0 2px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  /* 右侧那三个按钮（自动唤醒 / 提醒 / 清空会话）包成一组统一靠右：
+     之前 auto 边距只挂在「自动唤醒」上，窗口一窄就把它连同后面的按钮挤到下一行，
+     而且换行点随宽度漂移。成组后整组要么在右、要么整组换行，位置稳定。 */
+  .dsh-status-actions { margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .dsh-status .ok { color: #3fb950; }
   .dsh-approval-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
   .dsh-approval { border: 1px solid rgba(234, 179, 8, .45); background: rgba(234, 179, 8, .07); border-radius: 10px; padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 5px; }
@@ -1430,8 +1440,10 @@ function openPerson(agentId) {  const a = agentById[agentId];
           ${agentId !== 'user' ? `<span class="entry-badge ${esc(a.entry_type || 'manual')}">${entryTypeText(a)}</span>` : ''}
         </div>
       </div>
-      <button class="modal-close" onclick="togglePersonFullscreen()" title="全屏 / 恢复">⛶</button>
-      <button class="modal-close" onclick="closePerson()">✕</button>
+      <div class="modal-head-actions">
+        <button class="modal-close" onclick="togglePersonFullscreen()" title="全屏 / 恢复">⛶</button>
+        <button class="modal-close" onclick="closePerson()" title="关闭">✕</button>
+      </div>
     </div>
     ${agentId === 'user' ? '' : `
     <div class="modal-ops">
@@ -1487,9 +1499,11 @@ function openPerson(agentId) {  const a = agentById[agentId];
         <div class="dsh-status">
           <span class="ok">● 进程托管在线</span><span class="dim">模型：<select id="dshModelSelect" class="dsh-model-select" onchange="changeDshModel(this)"></select></span>
           <span class="dim" id="dshUsage">用量：${fmtTokens(dshTotalTokens())}</span>
-          <button class="btn mini" id="awakeBtn" onclick="toggleAutoWakeUI()" title="被 @ 或被派工时自动唤醒本成员（headless 跑一轮，会消耗 token）" style="margin-left:auto;padding:2px 8px;font-size:11px;">${autoWakeOn ? '⚡ 自动唤醒' : '⛔ 唤醒关'}</button>
-          <button class="btn mini" id="apvSoundBtn" onclick="toggleApvSoundUI()" title="审批到达时响铃提醒（离开界面也能听见）" style="padding:2px 8px;font-size:11px;">${apvSoundEnabled() ? '🔔 提醒开' : '🔕 提醒关'}</button>
-          <button class="btn mini" onclick="clearDshHistory()" style="padding:2px 8px;font-size:11px;">清空会话</button>
+          <span class="dsh-status-actions">
+            <button class="btn mini" id="awakeBtn" onclick="toggleAutoWakeUI()" title="被 @ 或被派工时自动唤醒本成员（headless 跑一轮，会消耗 token）" style="padding:2px 8px;font-size:11px;">${autoWakeOn ? '⚡ 自动唤醒' : '⛔ 唤醒关'}</button>
+            <button class="btn mini" id="apvSoundBtn" onclick="toggleApvSoundUI()" title="审批到达时响铃提醒（离开界面也能听见）" style="padding:2px 8px;font-size:11px;">${apvSoundEnabled() ? '🔔 提醒开' : '🔕 提醒关'}</button>
+            <button class="btn mini" onclick="clearDshHistory()" style="padding:2px 8px;font-size:11px;">清空会话</button>
+          </span>
         </div>
         <div class="dsh-approval-list" id="dshApprovalList"></div>
         <div class="dsh-msgs" id="dshMsgs">${renderDshHistory()}</div>
