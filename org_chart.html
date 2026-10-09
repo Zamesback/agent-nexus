@@ -147,15 +147,6 @@
   .proj-item.active { background: var(--panel); color: var(--text); border-color: var(--line-2); font-weight: 600; }
   .proj-item .cnt { float: right; font-family: var(--mono); font-size: 11px; color: var(--dim-2); font-weight: 400; margin-left: 6px; }
 
-  /* ===== 看板浮层（卡片盖在组织视图上） ===== */
-  .board-mask {
-    position: fixed; inset: 0; z-index: 100;
-    background: var(--bg);
-    display: none;
-  }
-  .board-mask.show { display: block; }
-  .board-frame { width: 100%; height: 100%; border: 0; display: block; }
-
   /* ===== 讨论室 v2.20 ===== */
   .discuss-toggle { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); cursor:pointer; user-select:none; }
   .discuss-toggle input { accent-color:var(--accent); }
@@ -178,20 +169,6 @@
   .dr-input { display:flex; gap:8px; padding:10px 16px; border-top:1px solid var(--line); }
   .dr-input input { flex:1; }
   .dr-banner { position:fixed; left:50%; top:14px; transform:translateX(-50%); background:var(--accent); color:var(--bg); padding:8px 18px; border-radius:20px; font-size:13px; font-weight:600; box-shadow:0 4px 20px rgba(0,0,0,.3); z-index:130; }
-  .board-close {
-    /* 贴左上角：看板浮层在 embed 模式下会空出顶栏左侧，这里正好补上「返回」 */
-    position: fixed; top: 12px; left: 20px; z-index: 101;
-    border: 1px solid var(--line-2);
-    background: var(--panel);
-    color: var(--text);
-    border-radius: var(--radius-sm);
-    padding: 7px 12px;
-    font-size: 12px;
-    cursor: pointer;
-    font-family: var(--sans);
-  }
-  .board-close:hover { border-color: var(--accent); color: var(--accent); }
-
   /* ===== 主布局 ===== */
   .main { display: flex; height: calc(100% - 96px); }
   /* ===== 可拖动分隔条（v2.20.6）===== */
@@ -676,12 +653,6 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <!-- 看板浮层 -->
-  <div class="board-mask" id="boardModal">
-    <button class="board-close" id="boardClose" title="返回组织视图">← 返回组织</button>
-    <iframe class="board-frame" id="boardFrame" title="任务看板"></iframe>
   </div>
 
   <!-- 讨论室：发起弹窗（v2.20） -->
@@ -2687,19 +2658,14 @@ async function stopDiscuss() {
 }
 document.getElementById('drChatInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendDiscussChat(); });
 
-function openBoardModal() {
-  const src = 'collab_board_nothing.html' + (PROJECT ? `?project=${encodeURIComponent(PROJECT)}` : '') + '&embed=1';
-  document.getElementById('boardFrame').src = src;
-  document.getElementById('boardModal').classList.add('show');
-}
-function closeBoardModal() {
-  document.getElementById('boardModal').classList.remove('show');
-  document.getElementById('boardFrame').src = 'about:blank';
+// v2.20.15：看板改成整页跳转，不再用浮层内嵌 —— 两个页面平级，
+// 来回切换走浏览器自身的返回，和「组织视图」按钮对称。
+function openBoard() {
+  location.href = 'collab_board_nothing.html' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '');
 }
 
 /* ===== 绑定 ===== */
-document.getElementById('btn-board').onclick = openBoardModal;
-document.getElementById('boardClose').onclick = closeBoardModal;
+document.getElementById('btn-board').onclick = openBoard;
 document.getElementById('btn-position').onclick = openPos;
 document.getElementById('btn-edit').onclick = toggleEdit;
 

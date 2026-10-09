@@ -13,7 +13,7 @@
  *   3. 三个皮肤（nothing/apple/premium）下 1.x 的变量名都改指 2.0 的值
  *   4. 复古文案（「// TASK BOARD」「已复制 // COPIED」…）不再出现
  *   5. 顶栏结构对齐、切换/返回路径对称
- *   6. 沟通区全屏与 embed 模式的关键规则在位
+ *   6. 沟通区全屏的关键规则在位，且浮层/embed 残留已清空
  *
  * 跑法：node tests/t10_board_theme_test.js
  */
@@ -180,16 +180,19 @@ ok('顶栏按钮统一用 .btn 体系（不再有 .org-btn / .api-settings-btn �
 ok('openOrgView 指向 /org_chart.html 并带 project 参数',
   /window\.location\.href\s*=\s*'\/org_chart\.html'/.test(BOARD) && /encodeURIComponent\(proj\)/.test(BOARD));
 ok('组织视图侧「看板」入口仍在（#btn-board）', /id="btn-board"/.test(ORG));
-ok('组织视图侧浮层可关闭（#boardClose → closeBoardModal）',
-  /id="boardClose"/.test(ORG) && /boardClose'\)\.onclick\s*=\s*closeBoardModal/.test(ORG));
-ok('浮层「← 返回组织」贴在左上（不与看板右上控件重叠）',
-  /\.board-close\s*\{[^}]*left:\s*20px/.test(ORG_CSS));
+ok('组织视图侧「看板」整页跳转（#btn-board → openBoard()）',
+  /id="btn-board"/.test(ORG) && /btn-board'\)\.onclick\s*=\s*openBoard;/.test(ORG) &&
+  /function openBoard\(\)\s*\{\s*location\.href\s*=\s*'collab_board_nothing\.html'/.test(ORG));
+ok('整页跳转带上 project 参数', /openBoard[\s\S]{0,300}encodeURIComponent\(PROJECT\)/.test(ORG));
+ok('浮层已彻底移除（无 board-mask / board-frame / board-close / iframe）',
+  !/board-mask/.test(ORG) && !/board-frame/.test(ORG) && !/board-close/.test(ORG) &&
+  !/board-mask/.test(ORG_CSS) && !/board-frame/.test(ORG_CSS) && !/board-close/.test(ORG_CSS));
 ok('看板 :root 与组织视图 :root 都声明在各自样式表开头',
   BOARD_CSS.indexOf(':root {') < BOARD_CSS.indexOf('.topbar') &&
   ORG_CSS.indexOf(':root {') < ORG_CSS.indexOf('.topbar'));
 
-/* ---------- 6. 沟通区全屏与 embed ---------- */
-section('6. 沟通区全屏 + embed 模式');
+/* ---------- 6. 沟通区全屏 ---------- */
+section('6. 沟通区全屏');
 ok('沟通区有 ⛶ 全屏按钮并绑定 toggleChatFullscreen()',
   /id="chat-fullscreen"[^>]*toggleChatFullscreen\(\)/.test(BOARD));
 ok('.chat-area.fullscreen 固定铺满视口',
@@ -199,12 +202,9 @@ ok('全屏时宽度用 !important 压过拖拽产生的内联宽度',
   /\.chat-area\.fullscreen\s*\{[^}]*width:\s*100%\s*!important/.test(BOARD_CSS));
 ok('全屏时消息列居中限宽', /\.chat-area\.fullscreen \.chat-messages\s*\{[^}]*max-width/.test(BOARD_CSS));
 ok('Esc 退出全屏已绑定', /addEventListener\('keydown'[\s\S]{0,200}Escape/.test(BOARD));
-ok('embed 模式给 body 打标记', /classList\.add\('embed'\)/.test(BOARD));
-ok('embed 模式空出顶栏左侧（留给父页面「← 返回组织」）',
-  /body\.embed \.topbar-left\s*\{[^}]*visibility:\s*hidden/.test(BOARD_CSS));
-ok('embed 模式仍隐藏 #org-toggle / #home-toggle',
-  /embed[\s\S]{0,400}getElementById\('org-toggle'\)/.test(BOARD) &&
-  /embed[\s\S]{0,400}getElementById\('home-toggle'\)/.test(BOARD));
+ok('embed 模式已彻底移除（无 body.embed 规则、无 embed 分支）',
+  !/classList\.add\('embed'\)/.test(BOARD) && !/body\.embed/.test(BOARD_CSS) &&
+  !/urlParams\.get\('embed'\)/.test(BOARD));
 
 /* ---------- 结果 ---------- */
 console.log('\n' + '='.repeat(60));

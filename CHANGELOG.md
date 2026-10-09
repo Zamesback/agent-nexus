@@ -1,3 +1,12 @@
+## v2.20.15 — The board is a page of its own, not an overlay
+
+- The chart's `看板` button used to load the board into a full-screen `<iframe>` on top of the organisation view. It now navigates there: both pages are peers, the browser's own back button does the return trip, and the board's `组织视图` button brings you back exactly the other way.
+- Removed with it: the overlay markup (`#boardModal`, `#boardFrame`, `#boardClose`), its CSS (`.board-mask`, `.board-frame`, `.board-close`), `openBoardModal()` / `closeBoardModal()`, and the board's `embed` branch (`body.embed` plus the `?embed=1` handling that hid `#org-toggle` / `#home-toggle`). Nothing else referenced them.
+- The reason it was worth doing: as an overlay the board was a nested document that could not be linked to, its own top bar had to surrender its left half to the parent's `← 返回组织` button, and the parent's close button had to be hand-placed to avoid covering the board's theme toggle and status dot. As separate pages none of that bookkeeping is needed.
+- `tests/t10_board_theme_test.js` was updated to the new contract: it now asserts the full-page navigation (including the `project` parameter) and that no overlay or embed remnant survives anywhere in either file. 82 cases. T5 27/27, T6 12/12, T7 22/22, T8 13/13, T9 36/36.
+- Client-side only — reload the pages; the server does not need restarting.
+- Housekeeping, no code involved: the `dsh_work/` directory left in the AgentNexus checkout (59 files, 2.0 MB of pre-v2.20.10 T86 wall experiments) was moved to `agent-collab-projects/三国指挥官/dsh_work/`. Hosted agents have written to their own project's data directory since v2.20.10 (`_dsh_run_cwd`), so nothing was producing files there any more; `.gitignore` keeps the rule as a fallback for the "project cannot be resolved" path.
+
 ## v2.20.14 — The board joins the 2.0 design language
 
 - The task board (`collab_board_nothing.html`) was still the 1.x "Nothing" pixel-retro page: VT323/Silkscreen pixel type loaded from a Google Fonts link, a 42 px grid wash behind a red radial glow, `#ff3621` orange-red accents, `// TASK BOARD`-style uppercase sub-headings and a hand-rolled `.org-btn` button family. It now shares the organisation view's design language instead of merely sharing a theme key.

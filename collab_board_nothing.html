@@ -1557,9 +1557,6 @@
     border-bottom: 1px solid var(--line);
   }
 
-  /* ---- 内嵌进组织视图浮层时：左侧品牌让给父页面的「← 返回组织」 ---- */
-  body.embed .topbar-left { visibility: hidden; }
-
   /* ---- 小标题：从「大写像素标签」改成组织视图的「小字 + 计数」---- */
   .board-header h2,
   .chat-header h2 {
@@ -2000,15 +1997,6 @@ function toggleNotificationSound(enabled) {
 // ===== 多项目支持（v2.0）=====
 // 从URL获取当前项目名，如 ?project=test-project
 const urlParams = new URLSearchParams(window.location.search);
-// embed 模式（组织视图看板浮层内嵌）：本页只出内容，顶栏左右由父页面接管 ——
-// 左上的「← 返回组织」是父页面按钮，所以左侧品牌区要空出来，右侧控件保持不变。
-if (urlParams.get('embed') === '1') {
-  document.body.classList.add('embed');
-  const _orgBtn = document.getElementById('org-toggle');
-  if (_orgBtn) _orgBtn.style.display = 'none';
-  const _homeBtn = document.getElementById('home-toggle');
-  if (_homeBtn) _homeBtn.style.display = 'none';
-}
 const currentProject = urlParams.get('project');
 
 // 重写fetch函数，自动给所有 /api/ 开头的请求加上 ?project=xxx
