@@ -179,13 +179,14 @@
   .dr-input input { flex:1; }
   .dr-banner { position:fixed; left:50%; top:14px; transform:translateX(-50%); background:var(--accent); color:var(--bg); padding:8px 18px; border-radius:20px; font-size:13px; font-weight:600; box-shadow:0 4px 20px rgba(0,0,0,.3); z-index:130; }
   .board-close {
-    position: fixed; top: 14px; right: 18px; z-index: 101;
+    /* 贴左上角：看板浮层在 embed 模式下会空出顶栏左侧，这里正好补上「返回」 */
+    position: fixed; top: 12px; left: 20px; z-index: 101;
     border: 1px solid var(--line-2);
     background: var(--panel);
     color: var(--text);
     border-radius: var(--radius-sm);
-    padding: 8px 14px;
-    font-size: 13px;
+    padding: 7px 12px;
+    font-size: 12px;
     cursor: pointer;
     font-family: var(--sans);
   }

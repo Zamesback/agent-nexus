@@ -3,42 +3,43 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>COLLAB // 协作看板</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Silkscreen&family=VT323&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<title>AgentNexus · 协作看板</title>
 <style>
-  /* ===== Nothing Dark Design Tokens ===== */
+  /* ===== 2.0 设计令牌（与 org_chart.html 完全对齐）===== */
   :root {
-    --bg: #0b0b0c;
-    --bg-2: #0f0f11;
-    --panel: rgba(var(--panel-rgb),.035);
-    --panel-2: rgba(var(--panel-rgb),.06);
-    --line: rgba(var(--panel-rgb),.13);
-    --line-2: rgba(var(--panel-rgb),.07);
-    --text: #f4f4f5;
-    --dim: #8d8d92;
-    --dim-2: #5f5f65;
-    --red: #ff3621;
-    --red-soft: rgba(var(--red-rgb),.16);
-    --red-glow: rgba(var(--red-rgb),.55);
-    --green: #22c55e;
-    --red-rgb: 255, 54, 33;
+    --bg: #0a0a0c;
+    --bg-2: #141418;
+    --panel: #1a1a1f;
+    --panel-2: #222228;
+    --text: #f2f2f4;
+    --dim: #9a9aa2;
+    --dim-2: #5c5c66;
+    --line: #2a2a32;
+    --line-2: #3a3a44;
+    --accent: #e5484d;
+    --accent-rgb: 229, 72, 77;
+    --green: #30a46c;
+    --amber: #f5a524;
+    --blue: #4c8dff;
+    --purple: #9c7bd8;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+    --radius-lg: 16px;
+    --radius-md: 10px;
+    --radius-sm: 8px;
+    /* 1.x 旧变量名保留，全部指向 2.0 令牌 —— 老规则自动跟随新皮肤 */
     --panel-rgb: 255, 255, 255;
-    --mono: 'VT323', monospace;
-    --pixel: 'Silkscreen','VT323',monospace;
-    --sans: 'Inter','Noto Sans SC','PingFang SC',-apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif;
-    --radius: 10px;
-    --radius-sm: 6px;
+    --red: var(--accent);
+    --red-rgb: var(--accent-rgb);
+    --red-soft: rgba(var(--accent-rgb), .14);
+    --red-glow: rgba(var(--accent-rgb), .45);
+    --pixel: var(--sans);
+    --radius: var(--radius-md);
   }
 
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
-    background:
-      radial-gradient(900px 500px at 78% -5%, rgba(var(--red-rgb),.10), transparent 55%),
-      linear-gradient(rgba(var(--panel-rgb),.022) 1px, transparent 1px) 0 0/42px 42px,
-      linear-gradient(90deg, rgba(var(--panel-rgb),.022) 1px, transparent 1px) 0 0/42px 42px,
-      var(--bg);
-    background-attachment: fixed;
+    background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
     height: 100vh;
@@ -48,66 +49,69 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* ===== 顶部栏 ===== */
+  /* ===== 顶部栏（与组织视图同构）===== */
   .topbar {
-    background: rgba(11,11,12,.85);
-    border-bottom: 1px solid var(--line);
-    padding: 14px 28px;
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items: center;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
     flex-shrink: 0;
-    z-index: 10;
-  }
-  .topbar-left h1 {
-    font-family: var(--pixel);
-    font-size: 14px;
-    font-weight: 400;
-    color: var(--text);
-    letter-spacing: 1px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    text-transform: uppercase;
-  }
-  .topbar-left h1 .logo-mark {
-    width: 24px; height: 24px;
-    border: 1.5px solid var(--red);
-    border-radius: 4px;
-    display: flex; align-items: center; justify-content: center;
-    font-family: var(--mono);
-    font-size: 16px;
-    color: var(--red);
     position: relative;
+    z-index: 30;
   }
-  .topbar-left h1 .logo-mark::after {
-    content: '';
-    position: absolute;
-    top: -3px; right: -3px;
-    width: 5px; height: 5px;
-    background: var(--red);
-    border-radius: 50%;
-  }
-  .topbar-left .subtitle {
+  .topbar-left { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .logo-mark {
     font-family: var(--mono);
-    font-size: 15px;
-    color: var(--dim);
-    margin-top: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
     letter-spacing: 0.5px;
   }
-  .topbar-right { display: flex; align-items: center; gap: 14px; }
+  .topbar-left .proj-name { font-size: 17px; font-weight: 600; white-space: nowrap; }
+  .topbar-left .subtitle {
+    font-size: 12px;
+    color: var(--dim);
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 38vw;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+  /* ===== 按钮：与组织视图同一套 .btn ===== */
+  .btn {
+    border: 1px solid var(--line-2);
+    background: var(--panel);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: border-color .15s, background .15s;
+  }
+  .btn:hover { border-color: var(--dim-2); background: var(--panel-2); }
+  .btn.primary { border-color: var(--accent); color: var(--accent); }
+  .btn.primary:hover { background: rgba(var(--accent-rgb), .12); }
+  .btn.ghost { border-color: transparent; color: var(--dim); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--line-2); }
+  .btn.active { border-color: var(--accent); color: var(--accent); background: rgba(var(--accent-rgb), .08); }
+
   .status-indicator {
     display: flex; align-items: center; gap: 7px;
-    font-family: var(--pixel);
-    font-size: 9px;
+    font-family: var(--mono);
+    font-size: 11px;
     color: var(--dim);
     letter-spacing: 0.5px;
-    text-transform: uppercase;
   }
   .status-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
-    background: var(--red);
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--red-glow);
   }
 
   /* (v2.5: Glyph 灯条已移除，减少视觉噪音) */
@@ -1199,32 +1203,8 @@
   .send-btn:active { transform: scale(0.97); }
 
   /* ===== API 设置弹窗（T2.2）===== */
-  .org-btn {
-    padding: 6px 12px;
-    background: transparent;
-    border: 1px solid var(--line-2);
-    border-radius: 3px;
-    color: var(--dim);
-    font-family: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .org-btn:hover { color: var(--text); border-color: var(--dim-2); }
-  .api-settings-btn {
-    padding: 6px 12px;
-    background: transparent;
-    border: 1px solid var(--red);
-    border-radius: 3px;
-    color: var(--red);
-    font-family: var(--pixel);
-    font-size: 8px;
-    letter-spacing: 0.5px;
-    cursor: pointer;
-    transition: all 0.2s;
-    text-transform: uppercase;
-  }
-  .api-settings-btn:hover { background: var(--red); color: #fff; }
+  /* (v2.20.14: 1.x 自造的 .org-btn / .api-settings-btn 已退役，
+     顶栏统一改用与组织视图相同的 .btn / .btn.ghost / .btn.primary) */
   .api-modal {
     position: fixed;
     top: 50%; left: 50%;
@@ -1508,6 +1488,287 @@
   }
   [data-theme="premium"] ::-webkit-scrollbar-track { background: #0F0F10; }
   [data-theme="premium"] ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); }
+
+  /* ===================================================================
+     v2.20.14 — 看板接入 2.0 设计语言
+     1.x 的像素复古风（VT323/Silkscreen 像素字体、网格底纹、四角红框、
+     「TASK BOARD //」式大写小标题）整体退役，改为与 org_chart.html
+     同构的排版、按钮与配色。
+     这一块必须留在样式表最末：它靠「同优先级后写者胜出」覆盖上面
+     1.x 的规则，不要把它挪到前面去。
+     =================================================================== */
+
+  /* ---- 主题令牌对齐组织视图（覆盖上面 1.x 的 apple / premium 块）---- */
+  [data-theme="apple"] {
+    --bg: #f5f5f7;
+    --bg-2: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f2f2f4;
+    --text: #1d1d1f;
+    --dim: #6e6e73;
+    --dim-2: #a1a1a6;
+    --line: #e5e5ea;
+    --line-2: #d1d1d6;
+    --accent: #ff3b30;
+    --accent-rgb: 255, 59, 48;
+    --green: #34c759;
+    --amber: #ff9500;
+    --blue: #007aff;
+    --purple: #af52de;
+    --panel-rgb: 0, 0, 0;
+    --red-soft: rgba(var(--accent-rgb), .10);
+    --red-glow: rgba(var(--accent-rgb), .30);
+    /* 1.x 的「红」变量名继续指向本主题的强调色，否则仍会取到旧块的蓝/旧红 */
+    --red: var(--accent);
+    --red-rgb: var(--accent-rgb);
+    --pixel: var(--sans);
+    --radius: var(--radius-md);
+  }
+  [data-theme="premium"] {
+    --bg: #0c0d10;
+    --bg-2: #14161c;
+    --panel: #191c24;
+    --panel-2: #222634;
+    --text: #ece5d8;
+    --dim: #8d8a80;
+    --dim-2: #55534d;
+    --line: #2b2e38;
+    --line-2: #3a3e4c;
+    --accent: #e27d60;
+    --accent-rgb: 226, 125, 96;
+    --green: #7fae7b;
+    --amber: #d8a25e;
+    --blue: #7a9cc6;
+    --purple: #a28abf;
+    --panel-rgb: 255, 255, 255;
+    --red-soft: rgba(var(--accent-rgb), .12);
+    --red-glow: rgba(var(--accent-rgb), .35);
+    --red: var(--accent);
+    --red-rgb: var(--accent-rgb);
+    --sans: Georgia, "Songti SC", "PingFang SC", serif;
+    --pixel: var(--sans);
+    --radius: var(--radius-md);
+  }
+  [data-theme="apple"] body,
+  [data-theme="premium"] body { background: var(--bg); }
+  [data-theme="apple"] .topbar,
+  [data-theme="premium"] .topbar {
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* ---- 内嵌进组织视图浮层时：左侧品牌让给父页面的「← 返回组织」 ---- */
+  body.embed .topbar-left { visibility: hidden; }
+
+  /* ---- 小标题：从「大写像素标签」改成组织视图的「小字 + 计数」---- */
+  .board-header h2,
+  .chat-header h2 {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 1px;
+    color: var(--dim-2);
+    text-transform: none;
+  }
+  .board-stats {
+    gap: 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim-2);
+  }
+  .board-stats span b {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .col-header {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 11px 14px 9px;
+  }
+  .col-header .count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim-2);
+    background: transparent;
+    border: none;
+    padding: 0;
+  }
+  .col-empty {
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 16px 10px;
+  }
+  .col-empty .col-empty-tip { font-size: 12px; }
+  .task-id { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; }
+  .task-priority {
+    font-family: var(--sans);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .task-assignee {
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .task-depends { font-family: var(--mono); font-size: 11px; }
+  .task-artifact { font-family: var(--mono); font-size: 11px; }
+  .task-artifact::before { content: none; }
+  .detail-id { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; }
+  .detail-label,
+  .detail-actions .actions-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 1px;
+    color: var(--dim-2);
+  }
+  .status-btn {
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+  }
+  .status-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .status-btn.active { box-shadow: none; }
+
+  /* ---- 聊天区：排版对齐组织视图的对话气泡 ---- */
+  .chat-area { background: var(--bg-2); }
+  .chat-head-right { display: flex; align-items: center; gap: 8px; }
+  #chat-fullscreen { padding: 3px 9px; font-size: 13px; line-height: 1.2; }
+  .msg-sender {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .msg-time { font-family: var(--mono); font-size: 11px; }
+  .msg-expand-btn {
+    font-family: var(--sans);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--dim);
+  }
+  .msg-body.collapsed::after {
+    background: linear-gradient(transparent, var(--panel));
+  }
+  [data-theme="apple"] .msg-body.collapsed::after,
+  [data-theme="premium"] .msg-body.collapsed::after {
+    background: linear-gradient(transparent, var(--panel));
+  }
+
+  /* ---- 沟通区全屏（v2.20.14）---- */
+  .chat-area.fullscreen {
+    position: fixed;
+    inset: 0;
+    width: 100% !important;
+    max-width: 100% !important;
+    z-index: 210;
+  }
+  .chat-area.fullscreen .chat-messages {
+    max-width: 1080px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  /* ---- 一律换成 .btn 体系的小按钮 ---- */
+  .copy-trigger-btn,
+  .global-copy-btn,
+  .cmd-menu-btn,
+  .onboard-btn,
+  .onboard-copy-btn,
+  .onboard-btn-secondary,
+  .onboard-btn-primary {
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+  }
+  .cmd-item {
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .global-copy-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 1px;
+    color: var(--dim-2);
+  }
+  .onboard-title { font-family: var(--sans); font-size: 17px; font-weight: 600; letter-spacing: 0; }
+  .onboard-step-num { font-family: var(--mono); font-size: 12px; }
+  .onboard-modal {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 24px 60px rgba(0,0,0,.5);
+  }
+  .auto-trigger-status { font-family: var(--sans); font-size: 12px; letter-spacing: 0; }
+  .ai-thinking { font-family: var(--sans); font-size: 12px; letter-spacing: 0; }
+  .identity-btn {
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 6px 10px;
+  }
+  .api-form label { font-family: var(--sans); font-size: 12px; }
+  .api-section-title { font-family: var(--mono); font-size: 11px; letter-spacing: 1px; }
+  .agent-status-badge { font-family: var(--sans); font-size: 11px; letter-spacing: 0; }
+  .api-modal h3 { font-family: var(--sans); }
+
+  /* ---- 输入区：去掉「> TYPE MESSAGE」的终端腔 ---- */
+  .chat-input:focus { box-shadow: none; }
+  .chat-input::placeholder { font-family: var(--sans); font-size: 13px; }
+  .send-btn {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 9px 18px;
+    border-radius: var(--radius-sm);
+  }
+  .send-btn:hover { background: rgba(var(--accent-rgb), .12); box-shadow: none; }
+
+  /* ---- 弹窗 / 卡片：去掉四角红框，圆角对齐 2.0 ---- */
+  .board-col { border-radius: var(--radius-md); border-color: var(--line); }
+  .task-card { border-radius: var(--radius-sm); }
+  .task-card.selected { box-shadow: none; }
+  .task-card.selected::before,
+  .task-card.selected::after { display: none; }
+  .task-detail,
+  .api-modal {
+    border-radius: var(--radius-lg);
+    box-shadow: 0 24px 60px rgba(0,0,0,.5);
+  }
+  .task-detail::before,
+  .task-detail::after,
+  .api-modal::before,
+  .api-modal::after { display: none; }
+  .task-detail .close,
+  .api-modal .close { border-radius: var(--radius-sm); }
+  .progress-progress,
+  .progress-blocked { box-shadow: none; }
 </style>
 </head>
 <body>
@@ -1515,17 +1776,15 @@
 <!-- 顶部栏 -->
 <div class="topbar">
   <div class="topbar-left">
-    <h1>
-      <span class="logo-mark">C</span>
-      COLLAB // 协作看板
-    </h1>
-    <div class="subtitle" id="project-subtitle">LOADING...</div>
+    <button class="btn ghost" id="home-toggle" onclick="location.href='/index.html'" title="回到项目总表">← 项目总表</button>
+    <span class="logo-mark">◆ AGENTNEXUS</span>
+    <span class="proj-name" id="proj-name">—</span>
+    <span class="subtitle" id="project-subtitle">协作看板</span>
   </div>
   <div class="topbar-right">
-    <button class="org-btn" id="home-toggle" onclick="location.href='/index.html'" title="回到项目总表">← 项目总表</button>
-    <button class="org-btn" id="org-toggle" onclick="openOrgView()" title="组织架构视图">组织视图</button>
-    <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色 / Premium">N // 暗色</button>
-    <button class="api-settings-btn" onclick="openApiSettings()">API 设置</button>
+    <button class="btn" id="org-toggle" onclick="openOrgView()" title="切到组织架构主界面">组织视图</button>
+    <button class="btn" onclick="openApiSettings()" title="API 与定时触发设置">API 设置</button>
+    <button class="btn ghost" id="theme-toggle" onclick="toggleTheme()" title="切换皮肤：Nothing 深色 / Apple 浅色 / Premium">A // 亮色</button>
     <div class="status-indicator">
       <div class="status-dot"></div>
       <span id="status-text">LIVE</span>
@@ -1538,7 +1797,7 @@
   <!-- 看板 -->
   <div class="board-area">
     <div class="board-header">
-      <h2>任务板 // TASK BOARD</h2>
+      <h2>任务板</h2>
       <div class="board-stats" id="board-stats"></div>
     </div>
     <div class="board-columns" id="board-columns"></div>
@@ -1548,22 +1807,25 @@
   <div class="layout-splitter" id="layout-splitter" title="拖拽调整沟通区宽度 · 双击重置"></div>
 
   <!-- 聊天 -->
-  <div class="chat-area">
+  <div class="chat-area" id="chat-area">
     <div class="chat-header">
-      <h2>协作讨论 // CHAT</h2>
-      <span class="msg-count" id="msg-count">0</span>
+      <h2>讨论</h2>
+      <div class="chat-head-right">
+        <span class="msg-count" id="msg-count">0</span>
+        <button class="btn ghost" id="chat-fullscreen" onclick="toggleChatFullscreen()" title="沟通区铺满全屏（Esc 退出）">⛶</button>
+      </div>
     </div>
     <div class="global-copy-bar">
       <div class="auto-trigger-ctl" title="自动触发总开关：开启后 @ 消息自动回复，关闭则退回手动复制模式">
-        <span class="auto-trigger-status" id="auto-trigger-status">MANUAL</span>
+        <span class="auto-trigger-status" id="auto-trigger-status">手动</span>
         <label class="switch small"><input type="checkbox" id="auto-trigger-toggle" onchange="toggleAutoTrigger()" /><span class="slider"></span></label>
       </div>
       <div class="cmd-menu">
-        <button class="cmd-menu-btn" id="cmd-menu-btn" onclick="toggleCmdMenu(event)">指令 // CMD <span class="caret">&#9662;</span></button>
+        <button class="cmd-menu-btn" id="cmd-menu-btn" onclick="toggleCmdMenu(event)">指令 <span class="caret">&#9662;</span></button>
         <div class="cmd-menu-dropdown" id="cmd-menu-dropdown">
-          <button class="cmd-item" onclick="cmdRun(event, 'copyGlobalTrigger')">复制检查指令 // COPY</button>
-          <button class="cmd-item" onclick="cmdRun(event, 'copyPollGuide')">轮询准则 // POLL</button>
-          <button class="cmd-item" onclick="cmdRun(event, 'openOnboardingGuide')">接入引导 // GUIDE</button>
+          <button class="cmd-item" onclick="cmdRun(event, 'copyGlobalTrigger')">复制检查指令</button>
+          <button class="cmd-item" onclick="cmdRun(event, 'copyPollGuide')">轮询准则</button>
+          <button class="cmd-item" onclick="cmdRun(event, 'openOnboardingGuide')">接入引导</button>
         </div>
       </div>
     </div>
@@ -1572,8 +1834,8 @@
     <div class="chat-input-area">
       <div class="chat-identity" id="chat-identity"></div>
       <div class="chat-input-row">
-        <input type="text" class="chat-input" id="chat-input" placeholder="> TYPE MESSAGE..." />
-        <button class="send-btn" onclick="sendMessage()">SEND</button>
+        <input type="text" class="chat-input" id="chat-input" placeholder="输入消息…（@ 成员可唤醒）" />
+        <button class="send-btn" onclick="sendMessage()">发送</button>
       </div>
     </div>
   </div>
@@ -1593,7 +1855,7 @@
 <div class="overlay" id="api-overlay" onclick="closeApiSettings()"></div>
 <div class="api-modal" id="api-modal">
   <span class="close" onclick="closeApiSettings()">✕</span>
-  <h3>API 设置 // LLM</h3>
+  <h3>API 设置</h3>
   <div class="api-form">
     <label>API Key</label>
     <input type="password" id="api-key-input" placeholder="sk-..." autocomplete="off" />
@@ -1611,7 +1873,7 @@
       <span>@ 自动触发（关闭退回手动）</span>
       <label class="switch"><input type="checkbox" id="api-auto-trigger-input" /><span class="slider"></span></label>
     </div>
-    <div class="api-section-title">定时触发 // SCHEDULE</div>
+    <div class="api-section-title">定时触发</div>
     <div class="api-toggle-row">
       <span>定时扫描未处理 @ 消息</span>
       <label class="switch"><input type="checkbox" id="schedule-enabled-input" onchange="saveScheduleConfig()" /><span class="slider"></span></label>
@@ -1627,12 +1889,12 @@
       </select>
     </div>
     <div class="schedule-info" id="schedule-info"></div>
-    <div class="api-section-title">提示音 // NOTIFICATION</div>
+    <div class="api-section-title">提示音</div>
     <div class="api-toggle-row">
       <span>新消息提示音（其他Agent发消息时"叮"一声）</span>
       <label class="switch"><input type="checkbox" id="notification-sound-input" onchange="toggleNotificationSound(this.checked)" /><span class="slider"></span></label>
     </div>
-    <div class="api-section-title">Agent 接入状态 // STATUS</div>
+    <div class="api-section-title">Agent 接入状态</div>
     <div class="agent-status-list" id="agent-status-list"></div>
     <div class="api-test-result" id="api-test-result"></div>
     <div class="api-actions">
@@ -1647,7 +1909,7 @@
 <div class="onboard-overlay" id="onboard-overlay" onclick="closeOnboardingGuide(event)">
   <div class="onboard-modal" onclick="event.stopPropagation()">
     <button class="onboard-close" onclick="closeOnboardingGuide()">✕</button>
-    <div class="onboard-title">AGENT 接入引导 // ONBOARDING</div>
+    <div class="onboard-title">Agent 接入引导</div>
     <div class="onboard-subtitle">三步完成 Agent 接入，无需手动搬运配置</div>
 
     <!-- 步骤指示器 -->
@@ -1738,8 +2000,10 @@ function toggleNotificationSound(enabled) {
 // ===== 多项目支持（v2.0）=====
 // 从URL获取当前项目名，如 ?project=test-project
 const urlParams = new URLSearchParams(window.location.search);
-// embed 模式（组织视图看板浮层内嵌）：隐藏「组织视图」跳转按钮，右上角由父页面提供返回
+// embed 模式（组织视图看板浮层内嵌）：本页只出内容，顶栏左右由父页面接管 ——
+// 左上的「← 返回组织」是父页面按钮，所以左侧品牌区要空出来，右侧控件保持不变。
 if (urlParams.get('embed') === '1') {
+  document.body.classList.add('embed');
   const _orgBtn = document.getElementById('org-toggle');
   if (_orgBtn) _orgBtn.style.display = 'none';
   const _homeBtn = document.getElementById('home-toggle');
@@ -1777,12 +2041,12 @@ const JSON_PATH = currentProject
 
 // Nothing 风格 Agent 配色：单色基调 + 红强调
 const AGENT_COLORS = {
-  planner: '#ff3621',   // 红 — 协调者
-  builder: '#a1a1a6',   // 亮灰 — 执行者
-  user: '#f4f4f5',      // 近白 — 用户
+  planner: '#e5484d',   // 强调红 — 协调者
+  builder: '#4c8dff',   // 蓝 — 执行者
+  user: '#f2f2f4',      // 近白 — 用户
 };
 // v2.8: 自定义 Agent 自动取色（内置色优先，其余按 id 哈希从调色板稳定分配）
-const AGENT_PALETTE = ['#e8b34b', '#5aa9e6', '#7ac74f', '#d65db1', '#4ecdc4', '#ff8c42', '#8c7ae6', '#63cdda'];
+const AGENT_PALETTE = ['#e5484d', '#f5a524', '#30a46c', '#4c8dff', '#9c7bd8', '#f76808', '#12b5c9', '#d95d9e'];
 function colorForAgent(id) {
   if (AGENT_COLORS[id]) return AGENT_COLORS[id];
   let h = 0;
@@ -1864,14 +2128,10 @@ async function loadBoard() {
     renderBoard();
     renderChat();
     renderStats();
-    // v2.5: 副标题动态显示当前项目名
+    // v2.20.14: 顶栏与组织视图同构 —— 项目名进 proj-name，视图名进副标题
     const projParam = new URLSearchParams(location.search).get('project') || '';
-    const subEl = document.getElementById('project-subtitle');
-    if (subEl) {
-      subEl.textContent = projParam
-        ? ('PROJECT // ' + projParam.toUpperCase())
-        : (boardData.name ? boardData.name : 'AGENT NEXUS');
-    }
+    const nameEl = document.getElementById('proj-name');
+    if (nameEl) nameEl.textContent = projParam || boardData.name || '协作看板';
     document.getElementById('status-text').textContent = 'LIVE';
   } catch (e) {
     document.getElementById('status-text').textContent = 'OFFLINE';
@@ -1910,9 +2170,9 @@ function renderStats() {
   const done = tasks.filter(t => t.status === 'done').length;
   const progress = tasks.filter(t => t.status === 'in_progress').length;
   document.getElementById('board-stats').innerHTML = `
-    <span>TOTAL <b>${total}</b></span>
-    <span>ACTIVE <b>${progress}</b></span>
-    <span>DONE <b>${done}</b></span>
+    <span>任务 <b>${total}</b></span>
+    <span>进行中 <b>${progress}</b></span>
+    <span>已完成 <b>${done}</b></span>
   `;
 }
 
@@ -1984,7 +2244,7 @@ function openTaskDetail(taskId) {
 
   const agent = boardData.agents.find(a => a.id === task.assignee);
   document.getElementById('detail-title').textContent = task.title;
-  document.getElementById('detail-id').textContent = `${task.id} // ${(task.priority || 'low').toUpperCase()}`;
+  document.getElementById('detail-id').textContent = `${task.id} · ${task.priority || 'low'}`;
 
   document.getElementById('detail-body').innerHTML = `
     <div class="detail-row"><span class="detail-label">负责人</span><span class="detail-value">${agent ? agent.name : task.assignee}</span></div>
@@ -1997,7 +2257,7 @@ function openTaskDetail(taskId) {
   `;
 
   document.getElementById('detail-actions').innerHTML = `
-    <span class="actions-label">切换状态 // SET STATUS</span>
+    <span class="actions-label">切换状态</span>
     ${Object.entries(STATUS_CONFIG).map(([key, cfg]) => `
       <button class="status-btn ${task.status === key ? 'active' : ''}"
               onclick="updateTaskStatus('${task.id}', '${key}')">${cfg.label}</button>
@@ -2144,10 +2404,10 @@ async function copyTriggerForAgent(agentId, btn) {
   const instruction = buildTriggerInstruction(agentId);
   const ok = await copyToClipboard(instruction);
   if (ok && btn) {
-    btn.textContent = '已复制 // COPIED';
+    btn.textContent = '已复制';
     btn.classList.add('copied');
     setTimeout(() => {
-      btn.textContent = '复制指令 // COPY';
+      btn.textContent = '已复制';
       btn.classList.remove('copied');
     }, 2000);
   }
@@ -2158,10 +2418,10 @@ async function copyGlobalTrigger() {
   const ok = await copyToClipboard(instruction);
   const btn = document.getElementById('global-copy-btn');
   if (ok && btn) {
-    btn.textContent = '已复制 // COPIED';
+    btn.textContent = '已复制';
     btn.classList.add('copied');
     setTimeout(() => {
-      btn.textContent = '复制检查指令 // COPY';
+      btn.textContent = '已复制';
       btn.classList.remove('copied');
     }, 2000);
   }
@@ -2192,11 +2452,11 @@ async function copyPollGuide() {
   const ok = await copyToClipboard(text);
   const btn = document.getElementById('poll-guide-btn');
   if (ok && btn) {
-    btn.textContent = '已复制 // COPIED';
+    btn.textContent = '已复制';
     btn.classList.add('copied');
     showToast('守护轮询准则已复制，粘贴给 Agent 即可');
     setTimeout(() => {
-      btn.textContent = '轮询准则 // POLL';
+      btn.textContent = '已复制';
       btn.classList.remove('copied');
     }, 2500);
   }
@@ -2215,10 +2475,10 @@ async function copyOnboardingGuide() {
     }
     const ok = await copyToClipboard(text);
     if (ok && btn) {
-      btn.textContent = '已复制 // COPIED';
+      btn.textContent = '已复制';
       btn.classList.add('copied');
       setTimeout(() => {
-        btn.textContent = '接入引导 // GUIDE';
+        btn.textContent = '已复制';
         btn.classList.remove('copied');
       }, 2500);
     }
@@ -2291,7 +2551,7 @@ function renderOnboardingStep() {
     `).join('');
 
     const copyBtnDisabled = onboardSelectedAgent ? '' : 'disabled';
-    const copyBtnText = onboardSelectedAgent ? '复制专属接入引导 // COPY' : '请先选择 Agent';
+    const copyBtnText = onboardSelectedAgent ? '复制专属接入引导' : '请先选择 Agent';
 
     contentEl.innerHTML = `
       <div class="onboard-step-title">第一步：选择 Agent 并复制引导</div>
@@ -2388,7 +2648,7 @@ async function copyOnboardingContent() {
   const btn = document.getElementById('onboard-copy-btn');
   const nextBtn = document.getElementById('onboard-next-btn');
   if (ok && btn) {
-    btn.textContent = '已复制 // COPIED ✓';
+    btn.textContent = '已复制 ✓';
     btn.classList.add('copied');
     if (nextBtn) nextBtn.disabled = false;
     showToast('专属接入引导已复制到剪贴板');
@@ -2691,7 +2951,7 @@ function renderMessage(msg, idx) {
   if (mentions.length > 0) {
     copyButtons = '<div class="msg-actions">' +
       mentions.map(m =>
-        `<button class="copy-trigger-btn" onclick="copyTriggerForAgent('${m.id}', this)">复制指令给 ${m.name} // COPY</button>`
+        `<button class="copy-trigger-btn" onclick="copyTriggerForAgent('${m.id}', this)">复制指令给 ${m.name}</button>`
       ).join('') +
       '</div>';
   }
@@ -2771,7 +3031,7 @@ async function loadAutoTriggerStatus() {
 function renderAutoTriggerStatus(auto) {
   const statusEl = document.getElementById('auto-trigger-status');
   if (!statusEl) return;
-  statusEl.textContent = auto ? 'AUTO' : 'MANUAL';
+  statusEl.textContent = auto ? '自动' : '手动';
   statusEl.className = 'auto-trigger-status ' + (auto ? 'on' : 'off');
 }
 
@@ -2997,6 +3257,27 @@ function initTheme() {
   try { saved = localStorage.getItem('agentnexus_theme') || 'nothing'; } catch (e) {}
   applyTheme(saved);
 }
+
+// ===== 沟通区全屏（v2.20.14）：聊天留在右端，可一键铺满 =====
+function toggleChatFullscreen(force) {
+  const area = document.getElementById('chat-area');
+  if (!area) return;
+  const want = (typeof force === 'boolean') ? force : !area.classList.contains('fullscreen');
+  area.classList.toggle('fullscreen', want);
+  const btn = document.getElementById('chat-fullscreen');
+  if (btn) {
+    btn.textContent = want ? '⤡' : '⛶';
+    btn.title = want ? '退出全屏（Esc）' : '沟通区铺满全屏（Esc 退出）';
+  }
+  // 退出后把消息列表滚到底，免得停在半空
+  const box = document.getElementById('chat-messages');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const area = document.getElementById('chat-area');
+  if (area && area.classList.contains('fullscreen')) toggleChatFullscreen(false);
+});
 
 // ===== 启动（置于 const 声明之后，避免 TDZ）=====
 init();
