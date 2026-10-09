@@ -539,6 +539,27 @@
   @keyframes dshPulse { 0%,100% { opacity: .75; } 50% { opacity: 1; } }
   .dsh-msg.thinking { align-self: flex-start; background: transparent; border: 1px dashed var(--line-2); color: var(--dim); font-size: 12px; }
   .dsh-msg .who { font-size: 10px; font-family: var(--mono); color: var(--dim-2); display: block; margin-bottom: 3px; }
+  /* v2.20.13：Agent 回复按 markdown 排版（表格/列表/代码块），用户自己打的字保持原样 */
+  .dsh-msg .md { white-space: normal; }
+  .dsh-msg .md > *:first-child { margin-top: 0; }
+  .dsh-msg .md > *:last-child { margin-bottom: 0; }
+  .dsh-msg .md p { margin: 6px 0; }
+  .dsh-msg .md h1, .dsh-msg .md h2, .dsh-msg .md h3 { margin: 12px 0 6px; line-height: 1.35; }
+  .dsh-msg .md h1 { font-size: 16px; } .dsh-msg .md h2 { font-size: 14.5px; } .dsh-msg .md h3 { font-size: 13.5px; }
+  .dsh-msg .md ul, .dsh-msg .md ol { margin: 6px 0; padding-left: 22px; }
+  .dsh-msg .md li { margin: 2px 0; }
+  .dsh-msg .md li.md-task { list-style: none; margin-left: -18px; }
+  .dsh-msg .md li.md-task input { margin-right: 5px; }
+  .dsh-msg .md code { font-family: var(--mono); font-size: 12px; background: var(--panel); border: 1px solid var(--line); padding: 1px 4px; border-radius: 4px; }
+  .dsh-msg .md pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; overflow-x: auto; white-space: pre; }
+  .dsh-msg .md pre code { background: none; border: 0; padding: 0; }
+  .dsh-msg .md a { color: var(--accent); }
+  .dsh-msg .md blockquote { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--line-2); color: var(--dim-1); }
+  .dsh-msg .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+  .dsh-msg .md table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; overflow-x: auto; max-width: 100%; }
+  .dsh-msg .md th, .dsh-msg .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .dsh-msg .md th { background: var(--panel); font-weight: 600; }
+  .dsh-msg.md-wide { max-width: 100%; }
   .dsh-usage { font-size: 10px; font-family: var(--mono); color: var(--dim-2); padding: 4px 0 0 2px; }
   .dsh-input-row { display: flex; gap: 8px; margin-top: 8px; }
   .dsh-input-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 9px 12px; font-size: 13px; outline: none; }
@@ -1670,8 +1691,8 @@ function renderMiniMarkdown(src) {
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
   const lines = t.split('\n');
   const out = [];
-  let inList = false, inQuote = false, tbl = [];
-  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  let listKind = null, inQuote = false, tbl = [];
+  const closeList = () => { if (listKind) { out.push('</' + listKind + '>'); listKind = null; } };
   const closeQuote = () => { if (inQuote) { out.push('</blockquote>'); inQuote = false; } };
   const flushTable = () => {
     if (!tbl.length) return;
@@ -1696,8 +1717,23 @@ function renderMiniMarkdown(src) {
     const q = line.match(/^>\s?(.*)$/);
     if (q) { closeList(); if (!inQuote) { out.push('<blockquote>'); inQuote = true; } out.push('<p>' + inline(q[1]) + '</p>'); continue; }
     closeQuote();
-    const li = line.match(/^\s*[-*+]\s+(.*)$/) || line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (li) { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + inline(li[1]) + '</li>'); continue; }
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    const ol = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    if (ul || ol) {
+      const kind = ol ? 'ol' : 'ul';
+      if (listKind && listKind !== kind) closeList();          // 有序/无序切换要换标签
+      if (!listKind) {
+        const start = (ol && ol[1] !== '1') ? ' start="' + ol[1] + '"' : '';
+        out.push('<' + kind + start + '>'); listKind = kind;
+      }
+      let body = ol ? ol[2] : ul[1];
+      const task = body.match(/^\[([ xX])\]\s+(.*)$/);          // v2.20.13：- [x] 待办清单
+      let liCls = '';
+      if (task) { liCls = ' class="md-task"'; body = '<input type="checkbox" disabled' + (task[1].toLowerCase() === 'x' ? ' checked' : '') + '> ' + inline(task[2]); }
+      else body = inline(body);
+      out.push('<li' + liCls + '>' + body + '</li>');
+      continue;
+    }
     closeList();
     if (!line.trim()) { out.push(''); continue; }
     out.push('<p>' + inline(line) + '</p>');
@@ -1896,11 +1932,7 @@ async function loadDshHistory() {
     dshServerUsage = j.total_usage || {};
     dshMsgsCache = j.history || [];
     const h = dshMsgsCache.slice(-30);
-    box.innerHTML = h.length ? h.map(m => {
-      const cls = m.role === 'user' ? 'user' : (m.role === 'thinking' ? 'thinking' : 'assistant');
-      const who = m.role === 'user' ? '你' : '终端 Agent';
-      return `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(m.content || '')}</div>`;
-    }).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
+    box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content)).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
     scrollToBottom(box);  // v2.20.4：打开卡片时滚动到最近消息
     if (usageEl) usageEl.textContent = '用量：' + fmtTokens(dshTotalTokens());
   } catch (e) {
@@ -1912,15 +1944,32 @@ function togglePersonFullscreen() {
   if (m) m.classList.toggle('fullscreen');
 }
 function esc2(x) { return String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// v2.20.13：托管成员的回复按 markdown 排版（表格 / 列表 / 代码块），
+// 用户自己打的字保持原样——打什么看到什么，星号和竖线不会被吃掉。
+function dshBody(role, content) {
+  const text = String(content == null ? '' : content);
+  if (role !== 'assistant') return { html: esc2(text), wide: false };
+  const html = renderMiniMarkdown(text);
+  return { html: '<div class="md">' + html + '</div>', wide: /<table/.test(html) };
+}
+function dshMsgHtml(role, content, whoOverride) {
+  const cls = role === 'user' ? 'user' : (role === 'thinking' ? 'thinking' : 'assistant');
+  const who = whoOverride || (role === 'user' ? '你' : '终端 Agent');
+  const b = dshBody(role, content);
+  return '<div class="dsh-msg ' + cls + (b.wide ? ' md-wide' : '') + '"><span class="who">' + who + '</span>' + b.html + '</div>';
+}
+// 流式更新：气泡已经在页面上，只换正文并同步「含表格放宽」这个状态
+function dshSetBody(el, role, content) {
+  if (!el) return;
+  const b = dshBody(role, content);
+  el.innerHTML = '<span class="who">终端 Agent</span>' + b.html;
+  el.classList.toggle('md-wide', !!b.wide);
+}
 function renderDshHistory() {
   // v2.17：打开卡片时由 loadDshHistory() 从服务端加载；此函数仅用于同步兜底
   const h = dshHistory().slice(-30);
   if (!h.length) return '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
-  return h.map(m => {
-    const cls = m.role === 'user' ? 'user' : (m.role === 'thinking' ? 'thinking' : 'assistant');
-    const who = m.role === 'user' ? '你' : '终端 Agent';
-    return `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(m.content || '')}</div>`;
-  }).join('');
+  return h.map(m => dshMsgHtml(m.role, m.content)).join('');
 }
 async function clearDshHistory() {
   if (!confirm('确定清空该成员的会话？历史记录与 Agent 记忆都会归零。')) return;
@@ -1937,9 +1986,7 @@ async function clearDshHistory() {
 function dshAppend(role, content) {
   const box = document.getElementById('dshMsgs');
   if (!box) return;
-  const cls = role === 'user' ? 'user' : (role === 'thinking' ? 'thinking' : 'assistant');
-  const who = role === 'user' ? '你' : '终端 Agent';
-  box.insertAdjacentHTML('beforeend', `<div class="dsh-msg ${cls}"><span class="who">${who}</span>${esc2(content)}</div>`);
+  box.insertAdjacentHTML('beforeend', dshMsgHtml(role, content));
   box.scrollTop = box.scrollHeight;
 }
 // v2.19.3：思考过程折叠块（默认收起，点开看完整推导）
@@ -2090,7 +2137,7 @@ async function sendToTerminal() {
           else {
             const box = document.getElementById('dshMsgs');
             const last = box ? box.lastElementChild : null;
-            if (last && last.classList.contains('dsh-msg')) last.innerHTML = '<span class="who">终端 Agent</span>' + esc2(replyContent);
+            if (last && last.classList.contains('dsh-msg')) dshSetBody(last, 'assistant', replyContent);
           }
           continue;
         }
@@ -2099,7 +2146,7 @@ async function sendToTerminal() {
             replyContent = ev.text;
             const box = document.getElementById('dshMsgs');
             const last = box ? box.lastElementChild : null;
-            if (last && last.classList.contains('dsh-msg')) last.innerHTML = '<span class="who">终端 Agent</span>' + esc2(replyContent);
+            if (last && last.classList.contains('dsh-msg')) dshSetBody(last, 'assistant', replyContent);
           }
           continue;
         }
@@ -2578,7 +2625,7 @@ function drAppend(m, noScroll) {
   const box = document.getElementById('drMsgs');
   if (!box) return;
   const who = m.from === '你' ? '你' : esc2(m.from || '成员');
-  box.insertAdjacentHTML('beforeend', '<div class="dsh-msg ' + (m.from === '你' ? 'user' : 'assistant') + '"><span class="who">' + who + '</span>' + esc2(m.text || '') + '</div>');
+  box.insertAdjacentHTML('beforeend', dshMsgHtml(m.from === '你' ? 'user' : 'assistant', m.text || '', who));
   if (!noScroll) box.scrollTop = box.scrollHeight;
 }
 function drActivity(speaker, step) {

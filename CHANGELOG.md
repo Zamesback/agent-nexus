@@ -1,3 +1,13 @@
+## v2.20.13 — Hosted replies are displayed as the markdown they already are
+
+- **Fixed**: a hosted member's reply is markdown — tables, ordered lists, headings, fenced code — but the chat bubble printed it through `esc2()` as literal text, so users read raw `| column | column |` pipes and `**bold**` asterisks. This was the common case, not an edge case: 13 of the 78 replies in the real 设计总负责DSH-1 history contain a table.
+- Assistant replies now render through `renderMiniMarkdown()`, the same zero-dependency renderer the deliverable preview has used since v2.20.6. Your own messages are deliberately *not* rendered — what you type is what you see. Thinking blocks, error lines and `thinking` entries stay plain too, so process output is not dressed up as prose.
+- The renderer gained what chat needs and the artifact preview could live without: ordered lists now emit `<ol>` (previously every list item became `<ul>`, losing 1/2/3 numbering), a non-1 start becomes `<ol start="n">`, an ordered↔unordered switch closes the previous tag, and `- [x]` / `- [ ]` render as real (disabled) checkboxes.
+- A bubble containing a table drops the 88 % width cap (`.md-wide`) so the table is not squeezed into a column, and tables scroll horizontally on their own when they are still too wide.
+- Streaming is covered: every `text` event re-renders the bubble and re-syncs the `md-wide` state, so the reply is formatted while it arrives, not only after it finishes. The same path serves history reload, the manual chat, and the discussion room (`drAppend`). Since this is entirely client-side, a page reload picks it up — no server restart needed.
+- Escaping is unchanged and still first: the renderer escapes before it parses, so `<>` and quotes in agent output cannot become markup. Covered explicitly.
+- **Tests**: new `tests/t9_chat_markdown_test.js` — 36 cases loading the real functions out of `org_chart.html` rather than a copy: table structure, separator-row filtering, per-cell inline markup, ordered lists and `start`, ordered↔unordered switching, task checkboxes (checked / unchecked / capital X), XSS escaping, user messages staying verbatim, fenced code blocks not being read as tables, `thinking` staying plain, custom speaker names, and `dshSetBody` adding *and* removing `md-wide` as the streamed text gains and loses a table. T5 27/27, T6 12/12, T7 22/22, T8 13/13.
+
 ## v2.20.12 — Approval countdowns are measured in the right unit
 
 - **Fixed**: the approval bridge sends `timeoutMs` in milliseconds (120000 by default) while everything on the server compares against `time.time()`, which is in seconds. Two places used the two together without converting, so both were wrong by a factor of 1000:
