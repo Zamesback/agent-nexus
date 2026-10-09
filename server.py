@@ -3253,7 +3253,10 @@ def _dsh_approval_pending(project=None):
         if project and ent.get("project") and ent.get("project") != project:
             continue
         tmo = float(ent.get("timeoutMs") or 0)
-        remaining = int(max(0, tmo - (now - ent.get("ts", now)))) if tmo > 0 else 0
+        # timeoutMs 是毫秒（桥传来 120000），而 time.time() 是秒——必须先在同一个单位里算，
+        # 否则 remainingMs 会大 1000 倍，前端会显示「约 1999 分 25 秒后自动拒绝」。
+        elapsed_ms = (now - ent.get("ts", now)) * 1000.0
+        remaining_ms = int(max(0.0, tmo - elapsed_ms)) if tmo > 0 else 0
         out.append({
             "requestId": rid,
             "project": ent.get("project") or "",
@@ -3261,7 +3264,7 @@ def _dsh_approval_pending(project=None):
             "toolName": ent.get("toolName") or "",
             "reason": ent.get("reason") or "",
             "timeoutMs": tmo,
-            "remainingMs": remaining * 1000,
+            "remainingMs": remaining_ms,
             "ts": ent.get("ts", 0),
         })
     out.sort(key=lambda x: x.get("ts", 0))
@@ -3282,7 +3285,10 @@ def _dsh_approval_state(request_id):
     if ent.get("expired"):
         return False, "该审批请求已超时自动拒绝", ent
     tmo = float(ent.get("timeoutMs") or 0)
-    if tmo > 0 and (time.time() - ent.get("ts", 0)) > (tmo + _DSH_APPROVAL_GRACE):
+    # timeoutMs 是毫秒，time.time() 是秒——换算后再比较。之前直接拿毫秒当秒比，
+    # 于是「桥没报超时」这条本地兜底路径要等 33 小时才生效，等于形同虚设。
+    tmo_s = tmo / 1000.0
+    if tmo_s > 0 and (time.time() - ent.get("ts", 0)) > (tmo_s + _DSH_APPROVAL_GRACE):
         ent["expired"] = True
         return False, "该审批请求已超时自动拒绝", ent
     return True, "", ent
