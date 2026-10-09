@@ -130,6 +130,22 @@
     document.head.appendChild(s);
   }
 
+  // 剩余时间的显示。
+  // 不变量：剩余时间永远不可能超过配置的时限（timeoutMs）。v2.20.12 之前的服务端
+  // 把毫秒当成秒来算（remainingMs 因此大了 1000 倍），浮层于是会写「约 1999 分 25 秒
+  // 后自动拒绝」，而同一张成员卡同时显示正确的「剩余 1 分 41 秒」。这里按不变量收口，
+  // 页面不必等 server 重启就能说人话；根因已在 v2.20.12 的服务端修掉。
+  function remainingText(p) {
+    var tmo = Number(p.timeoutMs) || 0;
+    var rem = Number(p.remainingMs) || 0;
+    if (rem < 0) rem = 0;
+    if (tmo > 0 && rem > tmo) rem = tmo;
+    var secs = Math.round(rem / 1000);
+    return secs >= 60 ? (Math.floor(secs / 60) + ' 分 ' + (secs % 60) + ' 秒') : (secs + ' 秒');
+  }
+  // 供 tests/t8_approval_toast_test.js 直接验证（不影响页面行为）
+  try { window.__agentnexusRemainingText = remainingText; } catch (e) {}
+
   function renderToast() {
     var ids = Object.keys(pending);
     var el = document.getElementById(TOAST_ID);
@@ -145,8 +161,7 @@
     }
     el.innerHTML = ids.map(function (rid) {
       var p = pending[rid] || {};
-      var secs = Math.round((p.remainingMs || 0) / 1000);
-      var left = secs >= 60 ? (Math.floor(secs / 60) + ' 分 ' + (secs % 60) + ' 秒') : (secs + ' 秒');
+      var left = remainingText(p);
       return '<div class="aa-head">⚠️ 需要你批准 · ' + esc(p.toolName || '工具') + '</div>' +
         '<div class="aa-body">' + esc(p.agentId || 'Agent') + '：' + esc(p.reason || '执行此操作需要权限升级') + '</div>' +
         '<button class="aa-allow" data-rid="' + esc(rid) + '" data-opt="allow">批准</button>' +
