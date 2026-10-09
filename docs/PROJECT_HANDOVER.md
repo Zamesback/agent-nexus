@@ -1,6 +1,7 @@
 # AgentNexus · 多 Agent 协同平台 — 项目交接文档
 
 > 版本：v2.20.5（本地 main）｜ 更新日期：2026-10-08 ｜ 作者：Zames 与协同 Agent 团队
+> 注：第 8 节 API 清单已于 v2.20.11 按 `server.py` 实际路由校准（旧文档里的 `/api/invite-agent`、`/api/register-agent`、`/api/update-agent-profile`、`/api/remove-agent`、`/api/org-relation`、`/api/org-position`、`/api/add-decision` 均不存在）；v2.20.6～v2.20.11 的功能变更见 `CHANGELOG.md`。
 > 本文件是接手者（人 / Agent）的**第一入口**。读完本文件即可掌握项目全貌、运行方式、核心机制与未决事项。
 
 ---
@@ -197,15 +198,16 @@ dsh-<项目>-<成员>/cordis.patch.yml    # 每托管成员一份（身份段按
 
 | 分组 | 端点 |
 |---|---|
-| 项目 | GET/POST `/api/projects`、DELETE `/api/project`、POST `/api/projects` |
+| 项目 | GET `/api/projects`、POST `/api/projects`、DELETE `/api/project` |
 | 看板 | GET `/api/board`、GET/POST `/api/config` |
 | 任务 | POST `/api/tasks/{id}`、POST `/api/claim` |
-| 消息/决策 | POST `/api/messages`、POST `/api/add-decision` |
-| Agent 管理 | POST `/api/invite-agent`、`/api/register-agent`、`/api/update-agent-profile`、`/api/remove-agent` |
-| 组织 | POST `/api/org-relation`、`/api/org-position` |
+| 消息/决策 | GET/POST `/api/messages`、GET/POST `/api/decisions` |
+| Agent 管理 | GET `/api/agents/status`、POST `/api/agents/register`、`/api/agents/update`、`/api/agents/invite`、`/api/agents/remove` |
+| 组织 | POST `/api/org/relation`、`/api/org/position` |
 | 协议 | POST `/api/protocol` |
-| 连接/调度 | POST `/api/test-connection`、`/api/schedule-config` |
-| dsh 托管 | POST `/api/dsh/chat`(SSE)、GET `/api/dsh/history`、POST `/api/dsh/history/clear`、POST `/api/dsh/approve`、GET/POST `/api/dsh/model` |
+| 连接/调度 | POST `/api/test-connection`、`/api/schedule-config`、GET `/api/api-status`、GET `/api/schedule-status` |
+| 总览/引导 | GET `/api/dashboard`、GET `/api/onboarding` |
+| dsh 托管 | POST `/api/dsh/chat`(SSE)、GET `/api/dsh/history`、POST `/api/dsh/history/clear`、POST `/api/dsh/approve`、GET/POST `/api/dsh/model`、GET/POST `/api/dsh/auto-wake`、GET `/api/dsh/approvals`、GET `/api/dsh/artifacts`、GET `/api/dsh/artifact` |
 | 讨论室 | POST `/api/discuss/start` `resume` `stop` `round-limit` `chat`、GET `/api/discuss/state` |
 
 全部支持 `?project=<项目名>` 参数。
