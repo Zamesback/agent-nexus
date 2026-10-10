@@ -3223,6 +3223,53 @@ def _handle_dsh_artifact(self, project=None):
     self.end_headers()
     self.wfile.write(body)
 
+def _discuss_transcript_full_path(project, rel):
+    """把 discussions/<文件名> 解析成真实路径；越界一律拒绝。返回 (绝对路径, 原因)。"""
+    rel = (rel or "").strip().lstrip("/")
+    if not rel:
+        return None, "缺少 path 参数"
+    base = get_project_path(project)
+    if not base:
+        return None, "项目不存在"
+    if ".." in rel.split("/") or "\\" in rel:
+        return None, "路径不合法"
+    root = os.path.realpath(os.path.join(base, DISCUSS_DIR_NAME))
+    full = os.path.realpath(os.path.join(base, rel))
+    if full != root and not full.startswith(root + os.sep):
+        return None, "只允许读取本项目的 %s/ 目录" % DISCUSS_DIR_NAME
+    return full, ""
+
+def _handle_discuss_transcript(self, project=None):
+    """GET /api/discuss/transcript?project=X&path=discussions/xxx.md[&download=1]：读会议转写"""
+    q = parse_qs(urlparse(self.path).query)
+    rel = (q.get("path") or [""])[0]
+    if not project:
+        self._send_json({"ok": False, "error": "缺少 project 参数"}, status=400)
+        return
+    full, why = _discuss_transcript_full_path(project, rel)
+    if not full:
+        self._send_json({"ok": False, "error": why}, status=400)
+        return
+    if not os.path.isfile(full):
+        self._send_json({"ok": False, "error": "转写不存在或已被移动"}, status=404)
+        return
+    try:
+        with open(full, "rb") as fh:
+            body = fh.read()
+    except Exception as e:
+        self._send_json({"ok": False, "error": "读取失败：%s" % e}, status=500)
+        return
+    self.send_response(200)
+    self.send_header("Content-Type", "text/plain; charset=utf-8")
+    self.send_header("Content-Length", str(len(body)))
+    self.send_header("Access-Control-Allow-Origin", "*")
+    self.send_header("Cache-Control", "no-store")
+    if (q.get("download") or [""])[0] in ("1", "true", "yes"):
+        fn = os.path.basename(full).replace('"', "")
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % fn)
+    self.end_headers()
+    self.wfile.write(body)
+
 # ===== v2.20.6：审批请求活跃表 =====
 # 桥接超时后，应答文件里仍可能落下一条「批准」。旧行为是照单写入、前端显示
 # 「✓ 已批准，继续执行」——而 Agent 其实早已按「拒绝」继续。这里记录每个请求的
@@ -4389,6 +4436,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/dsh/artifact":
             _handle_dsh_artifact(self, project)
+            return
+
+        # API: 讨论室会议转写（v2.20.18）——纪要卡上的「查看转写」走这里
+        if parsed.path == "/api/discuss/transcript":
+            _handle_discuss_transcript(self, project)
             return
 
         # API: 托管成员自动唤醒开关（v2.20.7）

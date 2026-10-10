@@ -1,3 +1,13 @@
+## v2.20.19 — The minutes open
+
+v2.20.18 made every discussion leave a transcript, but there was no way to read one without leaving the app. The minutes card now carries a `查看转写` button.
+
+- `GET /api/discuss/transcript?project=X&path=discussions/<file>.md[&download=1]` serves a transcript as `text/plain; charset=utf-8`. The path is resolved against the project's data directory and must land inside its own `discussions/` — `..`, backslashes, absolute paths and anything else under the project are refused with 400, so the endpoint cannot be used to read the board file or anything outside the project.
+- The button opens an in-page overlay (Esc closes it) with the transcript in a monospace, word-wrapped view, plus `下载` and `新标签页`. The header shows the topic, the round count and the end reason in words (`用户叫停` / `达到轮次上限`), from the minutes message's own `discuss` payload — no second request to work out what happened.
+- The minutes card also gained a `N 位与会者` hint next to the button.
+- `tests/t14_discuss_minutes_test.py` grew a section for the endpoint (now 114 cases): valid path resolves inside `discussions/`; `../collab_board.json`, `discussions/../../collab_board.json`, a bare `collab_board.json`, `/etc/passwd`, a backslash path and an empty path are all refused; HTTP 200 with the file's own bytes and no forced download, `download=1` adds `Content-Disposition`, and 400 / 404 / missing-`project` / missing-`path` all behave.
+- Verified live: the transcript recovered from the lost 52-round session (v2.20.18) now opens from the board, and traversal attempts are rejected.
+
 ## v2.20.18 — A discussion now leaves a record, and the people who were in it remember
 
 A room used to live only in memory. When the discussion ended the room was popped off `_discuss_rooms`, and the turns were never written anywhere else: `_discuss_msg` only appended to `room["history"]` and pushed an SSE frame, and `_discuss_turn` ran each speaker through `_dsh_run(..., session_id="", ...)` without ever calling `_dsh_append_history`. So a member asked afterwards, in good faith, "I have no record of that discussion" — and it was telling the truth. 52 turns of a real session were destroyed by the time the user asked.

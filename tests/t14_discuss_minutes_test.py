@@ -13,6 +13,7 @@ v2.20 的讨论室把房间放在内存里（_discuss_rooms），stop / server �
   A 转写落盘  _discuss_write_transcript / _discuss_finalize
   B 会议纪要  _discuss_post_minutes（看板 type=discuss 消息）
   C 成员记忆  _discuss_remember（dsh_chat/<成员>.json 追加一条）
+  D 转写查看  _discuss_transcript_full_path / _handle_discuss_transcript（GET /api/discuss/transcript）
 外加两个防回归点：discuss 类型不触发自动唤醒、discussions/ 进 git 快照范围。
 
 用法：python3 tests/t14_discuss_minutes_test.py
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -332,6 +334,83 @@ eq(M._discuss_subs[PROJ], [live], "死订阅与抛异常的订阅都被摘掉")
 eq(len(got), 1, "活订阅照常收到广播")
 
 # ---------- 防回归：唤醒与快照 ----------
+# ---------- 转写查看接口 ----------
+print("I. 会议转写查看接口")
+
+# 用 stop 那次落盘的转写当样本（stop_rel 已在 F 段落盘）
+full, why = M._discuss_transcript_full_path(PROJ, stop_rel)
+ok(full and os.path.isfile(full), "合法相对路径能解析到真实文件（%s）" % why)
+ok(full.startswith(os.path.realpath(os.path.join(PDIR, "discussions"))),
+   "解析结果落在本项目的 discussions/ 内")
+
+for bad, label in [("../collab_board.json", "上跳一级"),
+                   ("discussions/../../collab_board.json", "绕一圈上跳"),
+                   ("collab_board.json", "在 discussions/ 之外"),
+                   ("/etc/passwd", "绝对路径"),
+                   ("discussions/..\\..\\x", "反斜杠"),
+                   ("", "空路径")]:
+    f2, w2 = M._discuss_transcript_full_path(PROJ, bad)
+    ok(f2 is None, "拒绝 %s（%s）→ %s" % (label, bad, w2))
+
+f3, w3 = M._discuss_transcript_full_path("不存在的项目", stop_rel)
+ok(f3 is None, "项目不存在时拒绝（%s）" % w3)
+
+
+class FakeHTTP(object):
+    def __init__(self, query):
+        self.path = "/api/discuss/transcript?" + query
+        self.status = None
+        self.headers = []
+        self.body = b""
+        self.wfile = self
+
+    def _send_json(self, payload, status=200):
+        self.status = status
+        self.body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    def send_response(self, code):
+        self.status = code
+
+    def send_header(self, k, v):
+        self.headers.append((k, v))
+
+    def end_headers(self):
+        pass
+
+    def write(self, data):
+        self.body += data
+
+
+def hit(query):
+    h = FakeHTTP(query)
+    M._handle_discuss_transcript(h, PROJ)
+    return h
+
+
+q = "project=%s&path=%s" % (PROJ, quote(stop_rel))
+h = hit(q)
+eq(h.status, 200, "合法转写返回 200")
+eq(dict(h.headers).get("Content-Type"), "text/plain; charset=utf-8", "以纯文本返回")
+ok(stop_txt.encode("utf-8") in h.body, "返回内容与磁盘一致")
+ok("Content-Disposition" not in dict(h.headers), "默认不强制下载")
+
+h = hit(q + "&download=1")
+ok("Content-Disposition" in dict(h.headers), "download=1 时加 Content-Disposition")
+
+h = hit("project=%s&path=%s" % (PROJ, quote("collab_board.json")))
+eq(h.status, 400, "越界路径返回 400")
+ok("discussions" in h.body.decode("utf-8"), "400 里说明只允许 discussions/")
+
+h = hit("project=%s&path=%s" % (PROJ, quote("discussions/没有这份.md")))
+eq(h.status, 404, "文件不存在返回 404")
+
+h = FakeHTTP("path=%s" % quote(stop_rel))
+M._handle_discuss_transcript(h, None)
+eq(h.status, 400, "缺 project 返回 400")
+
+h = hit("project=%s" % PROJ)
+eq(h.status, 400, "缺 path 返回 400")
+
 print("H. 防回归")
 ok("discuss" in M.DSH_AUTO_WAKE_NO_WAKE_TYPES, "discuss 类型不触发自动唤醒")
 ok("system" in M.DSH_AUTO_WAKE_NO_WAKE_TYPES and "auto_reply" in M.DSH_AUTO_WAKE_NO_WAKE_TYPES,

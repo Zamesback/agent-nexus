@@ -601,6 +601,33 @@
     border: 1px solid var(--line-2);
     border-left: 3px solid var(--accent);
   }
+  .discuss-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .discuss-actions .hint { color: var(--dim-2); font-size: 11px; }
+  /* v2.20.18：会议转写查看浮层 */
+  #discussPreview {
+    position: fixed; inset: 0; z-index: 300; display: none;
+    background: rgba(0,0,0,.62); align-items: center; justify-content: center; padding: 24px;
+  }
+  #discussPreview.show { display: flex; }
+  .dp-box {
+    width: min(1080px, 94vw); height: min(88vh, 900px);
+    background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius-md);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .dp-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .dp-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dp-meta { color: var(--dim-2); font-size: 11px; font-family: var(--mono); }
+  .dp-head .spacer { flex: 1; }
+  .dp-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg-2); }
+  .dp-body pre {
+    margin: 0; padding: 18px 20px; font-family: var(--mono); font-size: 12px;
+    line-height: 1.75; color: var(--text); white-space: pre-wrap; word-break: break-word;
+  }
+  .dp-body .dp-loading { padding: 24px; color: var(--dim-2); font-size: 12px; }
+  .dp-body .dp-error { padding: 24px; color: var(--accent); font-size: 12px; }
   .msg:not(.system):not(.discuss) { align-self: flex-start; }
   .msg.self { align-self: flex-end; }
   .msg-sender {
@@ -2943,7 +2970,19 @@ function renderMessage(msg, idx) {
   if (isSystem) {
     // v2.20.18：type=discuss 是讨论室会议纪要——独立样式，不当普通系统提示压成一行
     const sysCls = msg.type === 'discuss' ? 'discuss' : 'system';
-    return `<div class="msg ${sysCls}"><div class="msg-content">${contentHtml}</div></div>`;
+    const d = msg.discuss || {};
+    let actions = '';
+    if (sysCls === 'discuss' && d.transcript) {
+      const j = s => JSON.stringify(String(s == null ? '' : s)).replace(/"/g, '&quot;');
+      const reasonLabel = DISCUSS_REASON_LABEL[d.reason] || d.reason || '';
+      const meta = '· ' + (d.rounds || 0) + ' 轮' + (reasonLabel ? (' · ' + reasonLabel) : '');
+      const who = d.participants ? (d.participants.length + ' 位与会者') : '';
+      actions = `<div class="discuss-actions">` +
+        `<button class="btn" onclick="openDiscussTranscript(${j(d.transcript)}, ${j(d.topic || '')}, ${j(meta)})">查看转写</button>` +
+        (who ? `<span class="hint">${who}</span>` : '') +
+        `</div>`;
+    }
+    return `<div class="msg ${sysCls}"><div class="msg-content">${contentHtml}${actions}</div></div>`;
   }
 
   // 长消息折叠（v2.5）：超过阈值默认收起，展开状态按消息索引记忆
@@ -3279,13 +3318,83 @@ function toggleChatFullscreen(force) {
 }
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  const dp = document.getElementById('discussPreview');
+  if (dp && dp.classList.contains('show')) { closeDiscussTranscript(); return; }
   const area = document.getElementById('chat-area');
   if (area && area.classList.contains('fullscreen')) toggleChatFullscreen(false);
 });
 
+// ===== v2.20.18：会议转写查看 =====
+const DISCUSS_REASON_LABEL = {
+  user_stop: '用户叫停', round_limit: '达到轮次上限',
+  no_speakers: '没有可用发言人', ended: '已结束'
+};
+let DP_REL = '';
+function discussTranscriptUrl(rel, download) {
+  const p = new URLSearchParams(location.search).get('project') || '';
+  return '/api/discuss/transcript?project=' + encodeURIComponent(p) +
+         '&path=' + encodeURIComponent(rel) + (download ? '&download=1' : '');
+}
+async function openDiscussTranscript(rel, topic, meta) {
+  if (!rel) return;
+  DP_REL = rel;
+  const box = document.getElementById('discussPreview');
+  const title = document.getElementById('dpTitle');
+  const metaEl = document.getElementById('dpMeta');
+  const body = document.getElementById('dpBody');
+  title.textContent = topic ? ('会议转写 · ' + topic) : '会议转写';
+  metaEl.textContent = meta || rel;
+  body.innerHTML = '<div class="dp-loading">读取中…</div>';
+  box.classList.add('show');
+  try {
+    const r = await fetch(discussTranscriptUrl(rel));
+    if (!r.ok) {
+      let why = 'HTTP ' + r.status;
+      try { why = (await r.json()).error || why; } catch (e) {}
+      body.innerHTML = '<div class="dp-error">读不到这份转写：' + why + '</div>';
+      return;
+    }
+    const text = await r.text();
+    const pre = document.createElement('pre');
+    pre.textContent = text;
+    body.innerHTML = '';
+    body.appendChild(pre);
+  } catch (e) {
+    body.innerHTML = '<div class="dp-error">读取失败：' + e + '</div>';
+  }
+}
+function closeDiscussTranscript() {
+  const box = document.getElementById('discussPreview');
+  if (box) box.classList.remove('show');
+  const body = document.getElementById('dpBody');
+  if (body) body.innerHTML = '';
+  DP_REL = '';
+}
+function downloadDiscussTranscript() {
+  if (!DP_REL) return;
+  window.open(discussTranscriptUrl(DP_REL, true), '_blank');
+}
+function openDiscussTranscriptRaw() {
+  if (!DP_REL) return;
+  window.open(discussTranscriptUrl(DP_REL), '_blank');
+}
+
 // ===== 启动（置于 const 声明之后，避免 TDZ）=====
 init();
 </script>
+<div id="discussPreview">
+  <div class="dp-box">
+    <div class="dp-head">
+      <span class="dp-title" id="dpTitle">会议转写</span>
+      <span class="dp-meta" id="dpMeta"></span>
+      <span class="spacer"></span>
+      <button class="btn" onclick="downloadDiscussTranscript()">下载</button>
+      <button class="btn" onclick="openDiscussTranscriptRaw()">新标签页</button>
+      <button class="btn ghost" onclick="closeDiscussTranscript()">关闭</button>
+    </div>
+    <div class="dp-body" id="dpBody"></div>
+  </div>
+</div>
 <script src="/approval_alert.js"></script>
 </body>
 </html>
