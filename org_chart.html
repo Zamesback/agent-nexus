@@ -170,7 +170,27 @@
   .dr-input input { flex:1; }
   .dr-banner { position:fixed; left:50%; top:14px; transform:translateX(-50%); background:var(--accent); color:var(--bg); padding:8px 18px; border-radius:20px; font-size:13px; font-weight:600; box-shadow:0 4px 20px rgba(0,0,0,.3); z-index:130; }
   /* ===== 主布局 ===== */
-  .main { display: flex; height: calc(100% - 96px); }
+  .main { display: flex; height: calc(100% - 96px); position: relative; }
+  /* ===== 左栏收起 + 画布拖拽平移（v2.20.17）===== */
+  .proj-bar-head { display: flex; align-items: center; justify-content: space-between; }
+  .proj-collapse {
+    font: inherit; font-size: 12px; line-height: 1; color: var(--dim-2);
+    background: none; border: 0; padding: 3px 6px; border-radius: 6px;
+    cursor: pointer; transition: color .15s, background .15s;
+  }
+  .proj-collapse:hover { color: var(--accent); background: var(--panel); }
+  body.proj-collapsed .proj-bar, body.proj-collapsed #splitLeft { display: none; }
+  .proj-reveal {
+    display: none; position: absolute; left: 8px; top: 10px; z-index: 8;
+    font: inherit; font-size: 12px; line-height: 1; color: var(--dim);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 5px 9px; cursor: pointer; transition: color .15s, border-color .15s;
+  }
+  .proj-reveal:hover { color: var(--accent); border-color: var(--accent); }
+  body.proj-collapsed .proj-reveal { display: inline-flex; }
+  .canvas-wrap.panning { cursor: grabbing; }
+  .canvas-wrap.panning * { cursor: grabbing !important; }
+  body.canvas-panning, body.canvas-panning * { user-select: none !important; }
   /* ===== 可拖动分隔条（v2.20.6）===== */
   .splitter {
     flex: 0 0 6px; position: relative; cursor: col-resize;
@@ -194,6 +214,7 @@
   body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-select: none !important; }
   .canvas-wrap {
     flex: 1; position: relative; overflow: auto;
+    cursor: grab;
     background:
       radial-gradient(ellipse 60% 50% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 70%),
       var(--bg);
@@ -590,8 +611,9 @@
   </div>
   <div class="legend" id="legendBar"></div>
   <div class="main">
+    <button class="proj-reveal" id="projReveal" onclick="toggleProjBar(false)" title="展开项目栏" aria-label="展开项目栏">»</button>
     <div class="proj-bar" id="projBar">
-      <div class="proj-bar-head">项目</div>
+      <div class="proj-bar-head">项目<button class="proj-collapse" id="projCollapse" onclick="toggleProjBar(true)" title="收起项目栏（画布更宽）" aria-label="收起项目栏">«</button></div>
       <div class="proj-list" id="projList"></div>
     </div>
     <div class="splitter" id="splitLeft" role="separator" aria-orientation="vertical" aria-label="调整项目栏宽度" title="拖动调整宽度 · 双击复位"></div>
@@ -1078,6 +1100,59 @@ function zoomFit() {
   }
   bind(left, sL, 'left');
   bind(right, sR, 'right');
+})();
+
+/* ===== 左栏收起（v2.20.17）===== */
+// 收起后画布变宽，收起状态记在 localStorage；分隔条也一起藏掉，否则会留一条空缝
+function toggleProjBar(collapse) {
+  const on = (collapse === undefined)
+    ? !document.body.classList.contains('proj-collapsed')
+    : !!collapse;
+  document.body.classList.toggle('proj-collapsed', on);
+  try { localStorage.setItem('agentnexus_projbar', on ? 'collapsed' : 'open'); } catch (e) {}
+}
+(function initProjBar() {
+  let v = '';
+  try { v = localStorage.getItem('agentnexus_projbar') || ''; } catch (e) {}
+  if (v === 'collapsed') document.body.classList.add('proj-collapsed');
+})();
+
+/* ===== 空白处按住左键拖动整个画布（v2.20.17）===== */
+// 用滚动容器的 scrollLeft/scrollTop 做平移：不动任何布局，节点坐标、连线、缩放全都不受影响。
+// 节点自己有一套 pointerdown 拖拽（enableNodeDrag），所以这里必须放过 .node 及其子元素，
+// 否则点节点会变成拖画布。
+(function initCanvasPan() {
+  const wrap = document.getElementById('canvasWrap');
+  if (!wrap) return;
+  let sx = 0, sy = 0, sl = 0, st = 0, panning = false;
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.node')) return;
+    if (e.target.closest('button, a, input, select, textarea')) return;
+    panning = true;
+    sx = e.clientX; sy = e.clientY;
+    sl = wrap.scrollLeft; st = wrap.scrollTop;
+    try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!panning) return;
+    wrap.scrollLeft = sl - (e.clientX - sx);
+    wrap.scrollTop = st - (e.clientY - sy);
+    if (!wrap.classList.contains('panning')) {
+      wrap.classList.add('panning');
+      document.body.classList.add('canvas-panning');
+    }
+  });
+  const end = () => {
+    if (!panning) return;
+    panning = false;
+    wrap.classList.remove('panning');
+    document.body.classList.remove('canvas-panning');
+  };
+  wrap.addEventListener('pointerup', end);
+  wrap.addEventListener('pointercancel', end);
+  // 拖出窗口再松手也要收尾
+  window.addEventListener('blur', end);
 })();
 
 /* ===== 渲染 ===== */

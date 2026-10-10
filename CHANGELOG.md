@@ -1,3 +1,12 @@
+## v2.20.17 — A project bar you can put away, and a chart you can shove around
+
+- The project list on the left can now be collapsed to give the chart the full width. `«` in the `项目` header puts it away, `»` in the chart's top-left corner brings it back; the divider goes with it, so no empty gutter is left behind. The state is remembered in `localStorage['agentnexus_projbar']` and applied before first paint, so a collapsed bar does not flash open on reload.
+- Holding the left button on empty canvas now pans the chart. It works by moving the scroll container's `scrollLeft` / `scrollTop` rather than by adding a `transform` to `#zoomLayer` — a transform there would fight `applyZoom()` and the nodes' absolute coordinates. The cursor is `grab` on the canvas and `grabbing` while dragging, text selection is suppressed for the duration, and `setPointerCapture` keeps the pan following the pointer even when it leaves the container.
+- The pan deliberately yields to `.node`: nodes have their own `pointerdown` drag (`enableNodeDrag`), and taking that over would turn "drag this person" into "shove the whole chart". Buttons, links and form fields are skipped too, as are the middle and right buttons.
+- The grabbing cursor is only applied once the pointer actually moves, so a plain click on the background does not flash it.
+- `tests/t13_projbar_pan_test.js` (new, 37 cases) runs the real `toggleProjBar()` and the real pan handler against a fake DOM: collapse/expand/derive-from-current state, all three `localStorage` states, restore-on-load, the wiring and the CSS contract; then pan direction (drag left 40px → `scrollLeft +40`, drag down 30px → `scrollTop −30`), no cursor flash on a plain press, `.node` / buttons / middle / right button all left alone, and the three teardown paths (`pointerup`, `pointercancel`, `blur`).
+- Full suite: T5 27/27, T6 12/12, T7 22/22, T8 13/13, T9 36/36, T10 82/82, T11 49/49, T12 30/30, T13 37/37.
+
 ## v2.20.16 — Deliverables that open, and a right column that reads as the board
 
 ### A member's deliverables now open when clicked
