@@ -1,3 +1,35 @@
+## v2.20.18 — A discussion now leaves a record, and the people who were in it remember
+
+A room used to live only in memory. When the discussion ended the room was popped off `_discuss_rooms`, and the turns were never written anywhere else: `_discuss_msg` only appended to `room["history"]` and pushed an SSE frame, and `_discuss_turn` ran each speaker through `_dsh_run(..., session_id="", ...)` without ever calling `_dsh_append_history`. So a member asked afterwards, in good faith, "I have no record of that discussion" — and it was telling the truth. 52 turns of a real session were destroyed by the time the user asked.
+
+### A — the transcript survives the room
+
+- Every turn now refreshes `discussions/<started>_<topic>.md` under the project's data directory (atomic `tmp` + `os.replace`, same-name collisions get `_2` / `_3`). Refreshing per turn rather than only at the end means a server crash mid-discussion still leaves everything said so far on disk.
+- The file is plain markdown: project, participants, start time, turn count, end reason, then `### N. speaker · HH:MM:SS` per turn. Capped at 400 turns.
+- The freshness check compares `(history length, end reason, still active)` rather than the length alone — a stop does not lengthen the history, but the header's `结束：` line has to change from `进行中` to `用户叫停`.
+
+### B — the board gets the minutes
+
+- When the room closes, one `type: "discuss"` message is posted by `system` to `all`, carrying `· 参与者 / · 轮次 / · 结束 / · 转写` plus each participant's closing position, and a `discuss` payload (`topic`, `participants`, `rounds`, `reason`, `transcript`) for machines.
+- The board page renders it as its own card — accent left border, full width, `纪要` tag in the chart's recent-events column — deliberately distinct from ordinary system notices.
+- `"discuss"` joined `DSH_AUTO_WAKE_NO_WAKE_TYPES`. The minutes go to `["all"]`, and without this the scheduler would read its own summary as an @-everyone and wake the whole team again.
+- `discussions/` joined `AUTO_GIT_EXTRA_PATHS`, so transcripts ride along with the board's automatic git snapshots.
+
+### C — the participants remember
+
+- Each participant gets exactly one `assistant` entry in `dsh_chat/<member>.json`: the minutes, a pointer to the transcript, their own closing position and the others'. One summary, not 52 turns — the 1:1 context stays usable.
+- A stop while a turn is still in flight no longer truncates the record: `_discuss_finish_async` waits (up to 300s) for `busy` to clear before writing and popping the room.
+
+### Also fixed
+
+- `emit` in the SSE loop wrote to `self.wfile` unguarded, so a browser that navigated away mid-discussion produced a `BrokenPipeError` traceback (seen at 11:42:35). Subscribers are now marked dead on `BrokenPipeError` / `ConnectionResetError` / `OSError` and dropped, both from `_discuss_broadcast` and from the handler's `finally`.
+
+### Tests
+
+- `tests/t14_discuss_minutes_test.py` (new, 95 cases): slugging, stable paths, collision numbering, atomic writes with no `.tmp` left behind, 400-turn truncation, closing positions, minutes text, board payload shape, one memory entry per participant with the right fields, finalize idempotence, both stop paths (sync and while busy), header rewrite on stop, dead-subscriber removal, and regressions (discuss in the skip list, discussions in the git snapshot list).
+- Isolated end-to-end run on a fake CLI (`/tmp/disc_harness`, port 8801, zero model cost): a 6-round discussion ended by `round_limit`, and a second one ended by user stop — each produced a transcript, one board minutes message and one memory entry per participant; no auto-wake was triggered by the minutes.
+- Full suite: T5 27/27, T6 12/12, T7 22/22, T8 13/13, T9 36/36, T10 82/82, T11 49/49, T12 30/30, T13 37/37, T14 95/95. Front-end only for the board/chart changes; `server.py` needed the usual restart.
+
 ## v2.20.17 — A project bar you can put away, and a chart you can shove around
 
 - The project list on the left can now be collapsed to give the chart the full width. `«` in the `项目` header puts it away, `»` in the chart's top-left corner brings it back; the divider goes with it, so no empty gutter is left behind. The state is remembered in `localStorage['agentnexus_projbar']` and applied before first paint, so a collapsed bar does not flash open on reload.

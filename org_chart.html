@@ -1447,7 +1447,8 @@ function renderSide() {
   // 最近发生：messages 倒序
   const recent = [...messages].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
   const recentN = recent.slice(-8).reverse();
-  const evTag = (text) => {
+  const evTag = (text, type) => {
+    if (type === 'discuss') return '<span class="ev-tag">纪要</span>';
     const t = (text || '').toLowerCase();
     if (/(报到|接入|注册|进入)/.test(text)) return '<span class="ev-tag report">报到</span>';
     if (/(完成|交付|产出|提交|done)/.test(text)) return '<span class="ev-tag produce">产出</span>';
@@ -1491,7 +1492,7 @@ function renderSide() {
       <div class="ev-list">
         ${recentN.length ? recentN.map(m => `
           <div class="ev-item">
-            ${evTag(m.content)}
+            ${evTag(m.content, m.type)}
             <span class="ev-who">${esc(whoName(m.sender))}</span> → ${esc(msgToText(m))}
             <div style="margin-top:3px;">${esc((m.content || '').slice(0, 80))}</div>
             <span class="ev-time">${fmtTime(m.timestamp)}</span>

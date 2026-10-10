@@ -685,7 +685,8 @@ def load_board(project=None):
 
 # v2.20.6：数据仓库快照范围扩大——原先只提交 collab_board.json，
 # 导致模型/会话配置、聊天历史、交付物登记都不在回滚网内。
-AUTO_GIT_EXTRA_PATHS = ("project_config.json", "dsh_chat", "dsh_artifacts.json", "processed_msg_ids.json")
+AUTO_GIT_EXTRA_PATHS = ("project_config.json", "dsh_chat", "dsh_artifacts.json", "processed_msg_ids.json",
+                        "discussions")   # v2.20.18：讨论室转写也进快照
 _GIT_SNAP_LAST = {}
 
 
@@ -2060,7 +2061,9 @@ DSH_AUTO_WAKE_DEFAULT = True
 DSH_AUTO_WAKE_WINDOW = 300.0
 DSH_AUTO_WAKE_AGENT_MAX = 3
 DSH_AUTO_WAKE_PROJECT_MAX = 8
-DSH_AUTO_WAKE_NO_WAKE_TYPES = ("system", "auto_reply")
+DSH_AUTO_WAKE_NO_WAKE_TYPES = ("system", "auto_reply", "discuss")
+# v2.20.18：discuss = 讨论室会议纪要，是「通知」不是「召唤」——纪要带 to:["all"]，
+# 若不排除，定时扫描器会把它当成一条 @ 全员的消息，把整个班子再叫起来一轮。
 DSH_AUTO_WAKE_RECENT = 20        # 触发消息必须落在看板最近 N 条消息内
 _DSH_WAKE_HISTORY = {}          # project -> [ts, ...]
 _DSH_WAKE_AGENT_HISTORY = {}    # (project, agent_id) -> [ts, ...]
@@ -3853,9 +3856,14 @@ def _discuss_broadcast(project, ev):
     for fn in subs:
         try:
             fn(ev)
-            alive.append(fn)
         except Exception:
-            pass
+            continue
+        # v2.20.18：emit 把「客户端断开」记在自己的 _state 上（不再抛异常刷 Traceback），
+        # 这里据此摘掉死订阅者。
+        st = getattr(fn, "_state", None)
+        if st is not None and st.get("dead"):
+            continue
+        alive.append(fn)
     _discuss_subs[project] = alive
 
 def _discuss_msg(project, room, frm, text):
@@ -3863,6 +3871,228 @@ def _discuss_msg(project, room, frm, text):
     room["history"].append(msg)
     _discuss_broadcast(project, {"type": "discuss_msg", "msg": msg})
     return msg
+
+# ===== v2.20.18：讨论室转写落盘 + 会议纪要（更拟人：开完会有纪要，与会者记得）=====
+# 背景：v2.20 的房间只在内存里（_discuss_rooms），stop / 重启即清空；讨论发言也从不进
+# dsh_chat/<成员>.json，于是事后问某个与会者「刚才讨论了什么」，它只能如实回答「没有记录」。
+# 这里补三件事：
+#   A 转写落盘  <项目目录>/discussions/<时间>_<话题>.md（每轮刷新一次，进程崩了也留档）
+#   B 会议纪要  看板落一条 type=discuss 的消息（话题/参与者/轮次/各人收尾立场/转写指针）
+#   C 成员记忆  给每位参与者往自己的聊天历史追加一条「我参加过 + 指针 + 收尾立场」
+DISCUSS_DIR_NAME = "discussions"
+DISCUSS_TRANSCRIPT_MAX = 400      # 单个转写文件最多收录多少条发言
+DISCUSS_MINUTES_CLIP = 420        # 纪要里每人收尾立场的截断长度
+DISCUSS_MEMO_OTHERS_CLIP = 240    # 成员记忆里「别人立场」的截断长度
+
+_DISCUSS_END_LABEL = {
+    "user_stop": "用户叫停",
+    "round_limit": "达到轮次上限",
+    "no_speakers": "没有可用发言人",
+    "ended": "已结束",
+}
+
+def _discuss_clip(text, limit):
+    s = str(text or "").strip()
+    return s if len(s) <= limit else s[:limit].rstrip() + "…"
+
+def _discuss_slug(text, limit=40):
+    """话题 → 安全文件名片段（去路径分隔符与控制字符，限长）"""
+    s = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", " ", str(text or ""))
+    s = re.sub(r"\s+", " ", s).strip().strip(".")
+    if len(s) > limit:
+        s = s[:limit].rstrip()
+    return s or "讨论"
+
+def _discuss_transcript_rel(project, room):
+    """给房间定一个稳定的转写文件名（首次调用时生成并记住）"""
+    rel = room.get("_transcript_rel")
+    if rel:
+        return rel
+    d = get_project_path(project)
+    if not d:
+        return None
+    stamp = room.get("started_at") or time.strftime("%Y-%m-%d_%H%M")
+    base = "%s_%s" % (stamp, _discuss_slug(room.get("topic")))
+    rel = os.path.join(DISCUSS_DIR_NAME, base + ".md")
+    n = 2
+    while os.path.exists(os.path.join(d, rel)):
+        rel = os.path.join(DISCUSS_DIR_NAME, "%s_%d.md" % (base, n))
+        n += 1
+    room["_transcript_rel"] = rel
+    return rel
+
+def _discuss_transcript_text(project, room):
+    names = room.get("member_names") or {}
+    parts = [names.get(p, p) for p in (room.get("participants") or []) if p != "user"]
+    hist = (room.get("history") or [])[-DISCUSS_TRANSCRIPT_MAX:]
+    reason = room.get("end_reason") or ("进行中" if room.get("active") else "ended")
+    lines = [
+        "# 讨论室转写 · %s" % (room.get("topic") or "讨论"),
+        "",
+        "- 项目：%s" % project,
+        "- 参与者：%s" % "、".join(parts),
+        "- 开始：%s" % (room.get("started_full") or room.get("started_at") or ""),
+        "- 发言：%d 条 · 轮次：%d" % (len(hist), room.get("round_count", 0)),
+        "- 结束：%s" % _DISCUSS_END_LABEL.get(reason, reason),
+        "",
+        "> 本文件由 AgentNexus 讨论室自动生成：每轮发言后刷新一次，房间关闭后依然保留。",
+        "",
+        "---",
+        "",
+    ]
+    for i, m in enumerate(hist, 1):
+        lines.append("### %d. %s · %s" % (i, m.get("from") or "", m.get("ts") or ""))
+        lines.append("")
+        lines.append(str(m.get("text") or "").strip())
+        lines.append("")
+    return "\n".join(lines)
+
+def _discuss_write_transcript(project, room):
+    """A：写/刷新转写文件（原子写）。返回相对项目目录的路径，失败返回 None"""
+    d = get_project_path(project)
+    rel = _discuss_transcript_rel(project, room)
+    if not d or not rel:
+        return None
+    path = os.path.join(d, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(_discuss_transcript_text(project, room))
+    os.replace(tmp, path)
+    return rel
+
+def _discuss_last_positions(room):
+    """每位参与者的最后一条发言（= 收尾立场），按参与者顺序返回 [(id, 显示名, 文本)]"""
+    names = room.get("member_names") or {}
+    last = {}
+    for m in (room.get("history") or []):
+        frm = m.get("from") or ""
+        if frm and frm != "你":
+            last[frm] = m
+    out = []
+    for pid in (room.get("participants") or []):
+        if pid == "user":
+            continue
+        disp = names.get(pid, pid)
+        out.append((pid, disp, (last.get(disp) or {}).get("text") or ""))
+    return out
+
+def _discuss_minutes_text(room, rel):
+    positions = _discuss_last_positions(room)
+    reason = room.get("end_reason") or "ended"
+    lines = [
+        "【会议纪要】讨论室「%s」" % (room.get("topic") or "讨论"),
+        "· 参与者：%s" % ("、".join(p[1] for p in positions) or "-"),
+        "· 轮次：%d 轮" % room.get("round_count", 0),
+        "· 结束：%s" % _DISCUSS_END_LABEL.get(reason, reason),
+        "· 转写：%s" % rel,
+    ]
+    if positions:
+        lines.append("")
+        lines.append("各人收尾立场：")
+        for _pid, disp, text in positions:
+            lines.append("· %s：%s" % (disp, _discuss_clip(text, DISCUSS_MINUTES_CLIP) or "（无发言）"))
+    return "\n".join(lines)
+
+def _discuss_post_minutes(project, room, rel):
+    """B：看板落一条会议纪要消息（type=discuss；广播给所有人，但不触发唤醒）"""
+    content = _discuss_minutes_text(room, rel)
+    positions = _discuss_last_positions(room)
+    with board_lock:
+        data = load_board(project)
+        msgs = data.setdefault("messages", [])
+        new_id = max([int(m["id"]) for m in msgs if str(m.get("id", "")).isdigit()], default=0) + 1
+        msgs.append({
+            "id": new_id,
+            "sender": "system",
+            "content": content,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            "type": "discuss",
+            "to": ["all"],
+            "discuss": {
+                "topic": room.get("topic") or "讨论",
+                "participants": [p[0] for p in positions],
+                "rounds": room.get("round_count", 0),
+                "reason": room.get("end_reason") or "ended",
+                "transcript": rel,
+            },
+        })
+        save_board(data, project)
+    return new_id
+
+def _discuss_remember(project, room, rel):
+    """C：给每位参与者往自己的聊天历史写一条「我参加过这场讨论」的记忆"""
+    positions = _discuss_last_positions(room)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    for pid, _disp, mine in positions:
+        others = ["· %s：%s" % (od, _discuss_clip(otext, DISCUSS_MEMO_OTHERS_CLIP) or "（无发言）")
+                  for opid, od, otext in positions if opid != pid]
+        text = ("【会议纪要】我参加了讨论室「%s」（共 %d 轮，%s）。\n"
+                "完整转写：%s\n"
+                "我在会上的收尾立场：%s\n"
+                "%s" % (
+                    room.get("topic") or "讨论",
+                    room.get("round_count", 0),
+                    _DISCUSS_END_LABEL.get(room.get("end_reason") or "ended",
+                                           room.get("end_reason") or "ended"),
+                    rel,
+                    _discuss_clip(mine, DISCUSS_MINUTES_CLIP) or "（本轮没有发言）",
+                    ("其他人的收尾立场：\n" + "\n".join(others)) if others else ""))
+        _dsh_append_history(project, pid, [{
+            "role": "assistant", "content": text, "ts": ts,
+            "discuss": True, "transcript": rel,
+        }])
+    return len(positions)
+
+def _discuss_finalize(project, room, minutes=True):
+    """A（按最新历史刷新转写）+ B/C（收尾只做一次）。幂等，可重复调用。"""
+    if not room:
+        return None
+    hist_len = len(room.get("history") or [])
+    # 刷新判定要连「结束原因 / 是否还在进行」一起看：叫停时历史没变长，
+    # 但转写头部的「结束：」那一行必须从「进行中」改成「用户叫停」。
+    sig = (hist_len, room.get("end_reason") or "", bool(room.get("active")))
+    rel = room.get("_transcript_rel")
+    if rel is None or room.get("_written_sig") != sig:
+        try:
+            rel = _discuss_write_transcript(project, room)
+            room["_written_len"] = hist_len
+            room["_written_sig"] = sig
+            if rel:
+                _auto_git_snapshot(project, min_interval=20.0)
+        except Exception as e:
+            _dsh_log("讨论转写写入失败: %s" % e)
+            return room.get("_transcript_rel")
+    if minutes and rel and not room.get("_minutes_done"):
+        try:
+            _discuss_post_minutes(project, room, rel)
+            _discuss_remember(project, room, rel)
+            room["_minutes_done"] = True
+            _dsh_log("会议纪要已落盘: project=%s topic=%s 轮次=%s 转写=%s" % (
+                project, room.get("topic"), room.get("round_count"), rel))
+        except Exception as e:
+            _dsh_log("会议纪要写入失败: %s" % e)
+    return rel
+
+def _discuss_finish_async(project, room):
+    """停止时若还有一轮在场：等它说完再落盘，然后清房间"""
+    import threading as _dth
+
+    def worker():
+        try:
+            for _ in range(600):          # 最多等 300s
+                if not room.get("busy"):
+                    break
+                time.sleep(0.5)
+            time.sleep(0.4)               # 让在场那一轮把最后一条写进 history
+            _discuss_finalize(project, room)
+        finally:
+            if _discuss_rooms.get(project) is room:
+                _discuss_rooms.pop(project, None)
+                _discuss_subs.pop(project, None)
+
+    _dth.Thread(target=worker, daemon=True).start()
+
 
 def _discuss_prompt(room, member_id):
     """构造唤醒消息：主题 + 完整讨论记录 + 回应上一家 + 收敛提示"""
@@ -3893,6 +4123,8 @@ def _discuss_turn(project):
             break
     if not mid:
         room["active"] = False
+        room["end_reason"] = room.get("end_reason") or "no_speakers"
+        _discuss_finalize(project, room)          # v2.20.18：收尾落盘 + 纪要
         _discuss_broadcast(project, {"type": "discuss_end", "reason": "no_speakers"})
         return False
     room["turn_idx"] = idx
@@ -3926,9 +4158,12 @@ def _discuss_turn(project):
     else:
         _discuss_broadcast(project, {"type": "discuss_error", "speaker": mid,
                                      "error": "该成员本轮未产出回复（模型或进程异常），跳过。"})
+    # v2.20.18：每轮发言后刷新转写文件——server 中途挂掉也留得下已经说过的话
+    _discuss_finalize(project, room, minutes=False)
     if room.get("round_limit") and room["round_count"] >= room["round_limit"]:
         room["active"] = False
         room["end_reason"] = "round_limit"
+        _discuss_finalize(project, room)          # 收尾：写纪要 + 各成员记忆
         _discuss_broadcast(project, {"type": "discuss_end", "reason": "round_limit"})
         return False
     return True
@@ -3968,7 +4203,10 @@ def _handle_discuss_common(self, project, with_start):
             return
         room = {"topic": topic, "participants": valid, "history": [],
                 "turn_idx": 0, "round_count": 0, "round_limit": req.get("round_limit") or None,
-                "active": True, "busy": None, "end_reason": None, "member_names": names}
+                "active": True, "busy": None, "end_reason": None, "member_names": names,
+                # v2.20.18：转写文件名与纪要头部要用到开始时间
+                "started_at": time.strftime("%Y-%m-%d_%H%M"),
+                "started_full": time.strftime("%Y-%m-%d %H:%M:%S")}
         _discuss_rooms[project] = room
         _discuss_msg(project, room, "你", "主题：" + topic)
     else:
@@ -3982,9 +4220,18 @@ def _handle_discuss_common(self, project, with_start):
     self.send_header("X-Accel-Buffering", "no")
     self.end_headers()
     subs = _discuss_subs.setdefault(project, [])
+    _estate = {"dead": False}
     def emit(ev):
-        self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
-        self.wfile.flush()
+        # v2.20.18：浏览器刷新/关页时 wfile 会 BrokenPipe——原来会往日志里丢 Traceback，
+        # 现在静默标记为死订阅（_discuss_broadcast 据此摘掉它）。
+        if _estate["dead"]:
+            return
+        try:
+            self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            _estate["dead"] = True
+    emit._state = _estate
     subs.append(emit)
     for m in room["history"]:
         emit({"type": "discuss_msg", "msg": m})
@@ -4014,14 +4261,25 @@ def _handle_discuss_resume(self, project=None):
     _handle_discuss_common(self, project, with_start=False)
 
 def _handle_discuss_stop(self, project=None):
-    """POST /api/discuss/stop：用户叫停，结束当前讨论"""
+    """POST /api/discuss/stop：用户叫停，结束当前讨论
+
+    v2.20.18：叫停不再是「把房间丢掉」——先把转写落盘、写会议纪要、给每位参与者
+    留一条记忆，然后才清房间。若此刻还有一轮在场（busy），交给后台线程等它说完
+    再落盘，避免最后一句被截掉。"""
     room = _discuss_rooms.get(project)
     if room:
         room["active"] = False
-        room["end_reason"] = "user_stop"
+        room["end_reason"] = room.get("end_reason") or "user_stop"
     _discuss_broadcast(project, {"type": "discuss_end", "reason": "user_stop"})
-    _discuss_rooms.pop(project, None)
-    _discuss_subs.pop(project, None)
+    if room and not room.get("busy"):
+        _discuss_finalize(project, room)
+        _discuss_rooms.pop(project, None)
+        _discuss_subs.pop(project, None)
+    elif room:
+        _discuss_finish_async(project, room)
+    else:
+        _discuss_rooms.pop(project, None)
+        _discuss_subs.pop(project, None)
     self._send_json({"ok": True})
 
 def _handle_discuss_round_limit(self, project=None):

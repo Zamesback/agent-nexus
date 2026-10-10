@@ -587,7 +587,21 @@
     border: 1px solid var(--line-2);
   }
   .msg.system .msg-sender { display: none; }
-  .msg:not(.system) { align-self: flex-start; }
+  /* v2.20.18：讨论室会议纪要——不是一行系统提示，是一张可读的纪要卡 */
+  .msg.discuss { align-self: stretch; max-width: 100%; }
+  .msg.discuss .msg-content {
+    background: var(--panel);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    line-height: 1.7;
+    text-align: left;
+    padding: 12px 16px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--line-2);
+    border-left: 3px solid var(--accent);
+  }
+  .msg:not(.system):not(.discuss) { align-self: flex-start; }
   .msg.self { align-self: flex-end; }
   .msg-sender {
     font-family: var(--pixel);
@@ -2913,7 +2927,7 @@ function renderMessage(msg, idx) {
   const color = colorForAgent(msg.sender);
   const name = agent ? agent.name : msg.sender;
   const isSelf = msg.sender === currentIdentity;
-  const isSystem = msg.type === 'system';
+  const isSystem = msg.type === 'system' || msg.type === 'discuss';
 
   let time = '';
   const ts = String(msg.timestamp);
@@ -2927,7 +2941,9 @@ function renderMessage(msg, idx) {
   const contentHtml = highlightMentions(msg.content);
 
   if (isSystem) {
-    return `<div class="msg system"><div class="msg-content">${contentHtml}</div></div>`;
+    // v2.20.18：type=discuss 是讨论室会议纪要——独立样式，不当普通系统提示压成一行
+    const sysCls = msg.type === 'discuss' ? 'discuss' : 'system';
+    return `<div class="msg ${sysCls}"><div class="msg-content">${contentHtml}</div></div>`;
   }
 
   // 长消息折叠（v2.5）：超过阈值默认收起，展开状态按消息索引记忆
