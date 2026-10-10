@@ -195,7 +195,7 @@ eq(len(read_board()["messages"]), 2, "第二条纪要 id 递增不覆盖")
 # ---------- C：成员记忆 ----------
 print("D. 与会者记忆")
 write_board()
-hist_dir = os.path.join(PDIR, "dsh_chat")
+hist_dir = os.path.dirname(M._dsh_history_path(PROJ, "dsh-a"))   # v2.20.20：问代码要路径，别写死
 if os.path.isdir(hist_dir):
     shutil.rmtree(hist_dir)
 room = make_room(hist=three_turns(), round_count=4, end_reason="user_stop")

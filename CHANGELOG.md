@@ -1,3 +1,17 @@
+## v2.20.20 — A hosted member can no longer read another member's private chat
+
+Reported symptom: Zames told one hosted member something in its own card, and a *different* member acted on it.
+
+Root cause, found in the members' own session logs: every member's working directory *is* the project data directory, and each member's private conversation with Zames was stored inside it at `dsh_chat/<member>.json`. Same-directory reads never trip the sandbox, so any member could `cat` any other member's full transcript without a single approval request. `DSH2` read `设计总负责DSH-1.json` in 22 places and then executed 「项二你补 6 帧」 — an instruction Zames had given to `设计总负责DSH-1` alone. Cross-checking eight instructions that were each meant for exactly one member, that one was the only leak; `~/.dsh/sessions/` (outside the workspace, and therefore behind an approval) was never read by anyone. Members go looking because a card conversation is invisible to the rest of the team.
+
+Three changes:
+
+- **Private chat moved out of the workspace** — now `<PROJECTS_ROOT>/.agentnexus/chat/<project>/<member>.json`. Still inside the data repository and still covered by the automatic git snapshots, but outside every member's working directory: reading it now needs a `danger-full-access` escalation, and the approval card names the file it wants. dsh sessions live in `~/.dsh`, so nobody's memory was reset.
+- **Legacy files are collected at startup** — a one-time pass moves every `<project>/dsh_chat/*.json` to the new location. If the new copy already exists, the old one is kept as `<name>.legacy-<timestamp>` inside the new directory; nothing is ever deleted. Reads fall back to the legacy path and the first write migrates lazily, so even an unexpected restart in the middle of the rollout cannot blank the UI history.
+- **Rules in the prompt** — the identity anchor now states what actually counts as an instruction (a board message that @-mentions or assigns you, or Zames talking to you in this conversation) and forbids reading other members' chat records; the auto-wake prompt repeats it. Reading a peer's record also leaves a `越界读取他人私聊记录` warning in the log — it is not blocked, because a process that can escalate should not be pretended to be blocked.
+
+Tests: new `tests/t15_chat_store_test.py` (58 cases — path layout, legacy fallback, lazy migration, clear, the 600-entry cap, git targets, the prompt rules, the audit, and the startup batch migration); `tests/t14_discuss_minutes_test.py` now asks the code for the history path instead of hard-coding it. Whole suite green: T5–T13 unchanged, T14 114/114, T15 58/58.
+
 ## v2.20.19 — The minutes open
 
 v2.20.18 made every discussion leave a transcript, but there was no way to read one without leaving the app. The minutes card now carries a `查看转写` button.
