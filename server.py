@@ -2937,6 +2937,7 @@ def _dsh_migrate_all_histories():
             old_dir = _os.path.join(root, proj, "dsh_chat")
             if not _os.path.isdir(old_dir):
                 continue
+            proj_moved = 0
             for fn in sorted(_os.listdir(old_dir)):
                 if not fn.endswith(".json"):
                     continue
@@ -2946,10 +2947,12 @@ def _dsh_migrate_all_histories():
                     _os.makedirs(_os.path.dirname(dst), exist_ok=True)
                     if not _os.path.exists(dst):
                         _os.replace(src, dst)
+                        proj_moved += 1
                         moved += 1
                     else:
                         alt = dst + ".legacy-" + time.strftime("%Y%m%d%H%M%S")
                         _os.replace(src, alt)
+                        proj_moved += 1
                         kept += 1
                         _dsh_log("聊天历史旧副本留档: %s -> %s" % (src, alt))
                 except Exception as e:
@@ -2959,11 +2962,29 @@ def _dsh_migrate_all_histories():
                     _os.rmdir(old_dir)
             except Exception:
                 pass
+            if proj_moved and _os.path.isdir(_os.path.join(root, ".git")):
+                _commit_history_move(root, proj)
     except Exception as e:
         _dsh_log("聊天历史批量迁移跳过: %s" % e)
     if moved or kept:
         _dsh_log("聊天历史批量迁移完成: 搬走 %d 个、留档 %d 个" % (moved, kept))
     return moved
+
+def _commit_history_move(root, proj):
+    """把这次搬迁提交进数据仓库：旧文件的删除要显式 -A 才记录得下来，否则工作区会一直挂着
+    一串 D。只动 dsh_chat/ 与 .agentnexus/chat/<项目>/，不碰项目目录里的其它改动。"""
+    import subprocess as _sp
+    try:
+        _sp.run(["git", "-C", root, "add", "-A", "--", os.path.join(proj, "dsh_chat")],
+                capture_output=True, timeout=20)
+        _sp.run(["git", "-C", root, "add", "--", os.path.join(DSH_CHAT_DIR, proj)],
+                capture_output=True, timeout=20)
+        _sp.run(["git", "-C", root, "commit", "-m",
+                 "chat: move %s private chat out of the members' workspace %s"
+                 % (proj, time.strftime("%Y-%m-%d %H:%M:%S"))],
+                capture_output=True, timeout=20)
+    except Exception:
+        pass
 
 def _dsh_member_cfg(project, agent_id):
     """读成员会话配置（project_config.json dsh.members.<agent_id>；terminal 兼容回退 dsh 根键）"""

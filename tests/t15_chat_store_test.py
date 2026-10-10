@@ -60,7 +60,7 @@ PROJ = "DemoProj"
 PDIR = os.path.join(TMP, PROJ)          # 成员的 cwd 就是这个目录
 os.makedirs(PDIR)
 M.PROJECTS_ROOT = TMP
-M.DSH_LOG_FILE = os.path.join(TMP, "t15_dsh.log")   # 别写进真实 /tmp/dsh_server.log
+M.DSH_LOG_FILE = os.path.join(tempfile.gettempdir(), "t15_chat_store_dsh.log")  # 别写进真实 /tmp/dsh_server.log，也别落在被 git 检查的临时仓库里
 _REAL_GIT_COMMIT = M._auto_git_commit
 M._auto_git_commit = lambda *a, **k: None   # 临时目录不是 git 仓库，别真跑 git（F 段临时换回来）
 
@@ -269,6 +269,34 @@ with open(os.path.join(TMP, M.DSH_CHAT_DIR, PROJ, legacy[0]), encoding="utf-8") 
 ok(all(not os.path.join(PDIR, "dsh_chat") == os.path.dirname(os.path.join(TMP, M.DSH_CHAT_DIR, PROJ, x))
        for x in os.listdir(os.path.join(TMP, M.DSH_CHAT_DIR, PROJ))), "留档落在新目录（成员够不到）")
 eq(M._dsh_migrate_all_histories(), 0, "再跑一次是幂等的（没有可搬的）")
+
+# ---------- J：搬迁提交进数据仓库 ----------
+print("J. 搬迁提交进数据仓库")
+fresh()
+os.environ["GIT_AUTHOR_NAME"] = os.environ["GIT_COMMITTER_NAME"] = "t15"
+os.environ["GIT_AUTHOR_EMAIL"] = os.environ["GIT_COMMITTER_EMAIL"] = "t15@example.invalid"
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", TMP] + list(args), capture_output=True, text=True)
+
+
+git("init", "-q")
+os.makedirs(os.path.join(PDIR, "dsh_chat"), exist_ok=True)
+with open(os.path.join(PDIR, "dsh_chat", "dsh-a.json"), "w", encoding="utf-8") as f:
+    json.dump([{"role": "user", "content": "搬迁前的记录"}], f, ensure_ascii=False)
+git("add", "-A")
+git("commit", "-q", "-m", "init")
+ok("DemoProj/dsh_chat/dsh-a.json" in git("ls-files").stdout, "前置：旧文件已在版本库里")
+
+M._dsh_migrate_all_histories()
+tracked = git("ls-files").stdout
+ok("DemoProj/dsh_chat/dsh-a.json" not in tracked, "旧文件的删除已被记录（否则工作区会一直挂着 D）")
+ok(os.path.join(".agentnexus", "chat", PROJ, "dsh-a.json") in tracked, "新位置已入库")
+eq(len([c for c in git("log", "--oneline").stdout.splitlines()]), 2, "搬迁产生了一条提交")
+ok(git("status", "--short").stdout.strip() == "", "提交后工作区干净（实际: %s）"
+   % git("status", "--short").stdout.strip().replace("\n", " | "))
+ok("private chat out of the members" in git("log", "-1", "--pretty=%s").stdout, "提交信息说明是搬迁")
 
 # ---------- 收尾 ----------
 shutil.rmtree(TMP, ignore_errors=True)
