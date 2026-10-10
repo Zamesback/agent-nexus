@@ -3132,9 +3132,11 @@ def _dsh_artifact_list(project, agent_id=None):
                 rp = os.path.realpath(p)
             except Exception:
                 rp = p
+            in_root = False
             for root in roots:
                 if rp == root or rp.startswith(root + os.sep):
                     item["rel"] = os.path.relpath(rp, root)
+                    in_root = True
                     break
             try:
                 st = os.stat(p)
@@ -3143,6 +3145,10 @@ def _dsh_artifact_list(project, agent_id=None):
                 item["mtime"] = st.st_mtime
             except Exception:
                 pass
+            # v2.20.16：Agent 也可能写到项目目录之外（/tmp、自己的家目录）——那些登记得到、
+            # 但预览接口按白名单取不回来。前端据此把「点了没反应」变成一句明确的解释。
+            item["previewable"] = bool(in_root and item["exists"])
+            item["reason"] = "" if in_root else "该文件写在允许预览的目录之外（Agent 的临时目录或家目录）"
             out.append(item)
     out.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
     return out

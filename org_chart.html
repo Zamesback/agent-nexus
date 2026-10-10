@@ -288,16 +288,29 @@
     color: var(--dim-2); margin-bottom: 10px;
     display: flex; align-items: center; justify-content: space-between;
   }
-  .decision-item {
-    border-left: 2px solid var(--accent);
-    padding: 6px 10px; margin-bottom: 8px;
-    background: var(--bg-2);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    font-size: 12px;
+  /* v2.20.16：右栏即任务板摘要 —— 「展开」入口 + 阶段分布 + 阶段图例 */
+  .panel-more {
+    font: inherit; font-size: 11px; letter-spacing: .04em; color: var(--dim);
+    background: none; border: 0; padding: 2px 6px; border-radius: 6px;
+    cursor: pointer; transition: color .15s, background .15s;
   }
-  .decision-item .d-title { font-weight: 600; color: var(--text); }
-  .decision-item .d-meta { font-size: 11px; color: var(--dim-2); font-family: var(--mono); margin-top: 3px; }
-  .decision-item .d-body { color: var(--dim); margin-top: 3px; line-height: 1.5; }
+  .panel-more:hover { color: var(--accent); background: var(--panel-2); }
+  .panel-more .arw { display: inline-block; transition: transform .18s ease; }
+  .panel-more:hover .arw { transform: translateX(3px); }
+  .stage-bar {
+    display: flex; gap: 2px; height: 5px; border-radius: 999px;
+    overflow: hidden; background: var(--panel-2); margin-bottom: 9px;
+  }
+  .stage-bar .seg { display: block; height: 100%; }
+  .stage-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .stage-legend .lg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); }
+  .stage-legend .lg b { font-family: var(--mono); font-weight: 600; color: var(--text); }
+  .stage-legend .st-dot { width: 6px; height: 6px; }
+  .board-list-title {
+    margin: 12px 0 5px; font-size: 10px; font-family: var(--mono);
+    color: var(--dim-2); letter-spacing: .05em;
+  }
+  .c-done { background: var(--green); }
   .big-num { font-size: 28px; font-weight: 700; font-family: var(--mono); color: var(--text); }
   .big-num.warn { color: var(--accent); }
   .big-num.sub { font-size: 14px; color: var(--dim); }
@@ -365,9 +378,17 @@
   .art-item .art-kind { flex: 0 0 auto; font-size: 13px; line-height: 1; }
   .art-item .art-name { flex: 1; min-width: 0; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .art-item .art-meta { flex: 0 0 auto; font-size: 10px; color: var(--dim-2); font-family: var(--mono); }
-  .art-item.art-gone { opacity: .45; }
+  /* v2.20.16：整行点开预览，右侧 ↗ 直接在新标签页打开原始文件 */
+  .art-item .art-open {
+    flex: 0 0 auto; font-size: 12px; line-height: 1; color: var(--dim-2);
+    padding: 2px 4px; border-radius: 5px; opacity: 0; transition: opacity .12s;
+  }
+  .art-item:hover .art-open { opacity: 1; }
+  .art-item .art-open:hover { color: var(--accent); background: var(--panel); }
+  .art-item.art-gone { opacity: .45; cursor: default; }
+  .art-item.art-gone:hover { background: none; border-color: transparent; }
   .art-item.art-gone .art-name { text-decoration: line-through; }
-  #artPreview { position: fixed; inset: 0; z-index: 90; display: none; background: rgba(0, 0, 0, .72); }
+  #artPreview { position: fixed; inset: 0; z-index: 200; display: none; background: rgba(0, 0, 0, .72); }
   #artPreview.show { display: flex; align-items: center; justify-content: center; }
   .art-pv-box { width: 88vw; max-width: 1180px; height: 86vh; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .5); }
   .art-pv-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
@@ -1359,6 +1380,16 @@ function renderSide() {
     return '<span class="ev-tag">消息</span>';
   };
   const whoName = (id) => { const a = agentById[id]; return a ? (a.name || id) : id; };
+  // v2.20.16：右栏就是「任务板最上面那段总结」——阶段分布用与看板同名的阶段词与同一套状态色
+  const STAGES = [
+    { key: 'todo',        label: '待办',   cls: 'c-todo' },
+    { key: 'in_progress', label: '进行中', cls: 'c-doing' },
+    { key: 'review',      label: '待验收', cls: 'c-review' },
+    { key: 'blocked',     label: '阻塞',   cls: 'c-blocked' },
+    { key: 'done',        label: '已完成', cls: 'c-done' },
+  ];
+  const stages = STAGES.map(s => ({ ...s, n: tasks.filter(t => (t.status || 'todo') === s.key).length }))
+                       .filter(s => s.n > 0);
   side.innerHTML = `
     <div class="panel">
       <div class="panel-title">在等你</div>
@@ -1367,22 +1398,18 @@ function renderSide() {
       <div class="readout-row"><span class="readout-label">班子成员</span><span class="readout-val">${agents.length}</span></div>
     </div>
     <div class="panel">
-      <div class="panel-title">未闭合事项</div>
+      <div class="panel-title"><span>任务板</span>
+        <button class="panel-more" onclick="openBoard()" title="进入任务板">展开 <span class="arw">→</span></button>
+      </div>
+      ${stages.length ? `<div class="stage-bar">${stages.map(s => `<span class="seg ${s.cls}" style="flex:${s.n}" title="${s.label} ${s.n}"></span>`).join('')}</div>
+      <div class="stage-legend">${stages.map(s => `<span class="lg"><i class="st-dot ${s.cls}"></i>${s.label} <b>${s.n}</b></span>`).join('')}</div>` : ''}
+      <div class="board-list-title">未闭合 ${pending.length}</div>
       ${pending.length ? pending.slice(0, 6).map(t => `
         <div class="pending-item">
           <span class="st-dot ${t.status === 'blocked' ? 'c-blocked' : t.status === 'in_progress' ? 'c-doing' : t.status === 'review' ? 'c-review' : 'c-todo'}"></span>
           <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.title)}</span>
           <span class="who">${esc(whoName(t.assignee))}</span>
         </div>`).join('') : '<div class="pending-empty">全部闭合，没有在途事项</div>'}
-    </div>
-    <div class="panel">
-      <div class="panel-title">决策沉淀</div>
-      ${(board.decisions || []).length ? [...(board.decisions || [])].reverse().map(d => `
-        <div class="decision-item">
-          <div class="d-title">${esc(d.title)}</div>
-          <div class="d-body">${esc(d.decision)}</div>
-          <div class="d-meta">${esc(whoName(d.by))} · ${fmtTime(d.ts)} · ${esc(d.status)}</div>
-        </div>`).join('') : '<div class="pending-empty">还没有决策沉淀</div>'}
     </div>
     <div class="panel">
       <div class="panel-title">最近发生</div>
@@ -1563,10 +1590,11 @@ async function loadArtifacts() {
       return;
     }
     box.innerHTML = items.map((a, i) => `
-      <div class="art-item ${a.exists ? '' : 'art-gone'}" onclick="openArtifactPreview(${i})" title="${esc(a.path)}">
+      <div class="art-item ${a.previewable ? '' : 'art-gone'}" onclick="openArtifactPreview(${i})" title="${esc(a.path)}">
         <span class="art-kind">${ART_ICON[a.kind] || '📦'}</span>
         <span class="art-name">${esc(a.name)}</span>
-        <span class="art-meta">${a.exists ? fmtBytes(a.size) : '已不在'}</span>
+        <span class="art-meta">${a.previewable ? fmtBytes(a.size) : (a.exists ? '不可预览' : '已不在')}</span>
+        ${a.previewable ? `<span class="art-open" title="在新标签页打开" onclick="event.stopPropagation();openArtifactRawIdx(${i})">↗</span>` : ''}
       </div>`).join('');
     box.dataset.items = JSON.stringify(items);
   } catch (e) {
@@ -1593,6 +1621,13 @@ function openArtifactPreview(idx) {
   body.innerHTML = '';
   if (!a.exists) {
     body.innerHTML = '<div class="art-pv-fallback"><span class="big">🕳</span>文件已不在磁盘上（可能被移动或删除）<br><span style="font-size:11px;font-family:var(--mono);">' + esc(a.path) + '</span></div>';
+    box.classList.add('show');
+    return;
+  }
+  if (a.previewable === false) {
+    body.innerHTML = '<div class="art-pv-fallback"><span class="big">🚫</span>这个文件没法在界面里预览<br>' +
+      esc(a.reason || '路径不在允许预览的目录内') +
+      '<br><span style="font-size:11px;font-family:var(--mono);">' + esc(a.path) + '</span></div>';
     box.classList.add('show');
     return;
   }
@@ -1633,7 +1668,10 @@ function openArtifactPreview(idx) {
     body.innerHTML = '<div class="art-pv-fallback"><span class="big">📦</span>这个类型没法预览<br>点右上角「下载」或「新标签页」试试</div>';
   } else {
     body.innerHTML = '<pre>读取中…</pre>';
-    fetch(url).then(r => r.text()).then(txt => {
+    fetch(url).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 403 ? '（不在允许预览的目录内）' : ''));
+      return r.text();
+    }).then(txt => {
       if (ART_CUR !== a) return;
       if (k === 'markdown') body.innerHTML = '<div class="art-md">' + renderMiniMarkdown(txt) + '</div>';
       else if (k === 'json') body.innerHTML = '<pre class="with-ln">' + esc(prettyJson(txt)) + '</pre>';
@@ -1723,6 +1761,11 @@ function closeArtPreview() {
 }
 function downloadArtifact() { if (ART_CUR) window.location.href = artUrl(ART_CUR, true); }
 function openArtifactRaw() { if (ART_CUR) window.open(artUrl(ART_CUR), '_blank'); }
+// v2.20.16：列表里每行的 ↗ —— 不进预览浮层，直接新标签页打开原始文件
+function openArtifactRawIdx(idx) {
+  const a = _artItems()[idx];
+  if (a && a.previewable) window.open(artUrl(a), '_blank');
+}
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { const b = document.getElementById('artPreview'); if (b && b.classList.contains('show')) closeArtPreview(); }
 });

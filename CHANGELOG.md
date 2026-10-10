@@ -1,3 +1,26 @@
+## v2.20.16 — Deliverables that open, and a right column that reads as the board
+
+### A member's deliverables now open when clicked
+
+- Clicking a row in a hosted member's `交付物` list did nothing visible: the preview overlay was painted *behind* the person card. `#artPreview` had `z-index: 90` while the person card's `.modal-mask` sits at `100`, so only the strip of the preview's title bar that stuck out above the card could be seen. Raised to `200` (above `.modal-mask` and `.discuss-room`).
+- Rows that cannot be previewed now say so instead of failing silently. Agents also write to `/tmp` and to their own home directory — those paths are registered but the preview endpoint refuses them (its whitelist covers the project workspace, the project's data directory and the AgentNexus checkout). `/api/dsh/artifacts` now returns `previewable` and `reason` per item, computed from the same realpath check the listing already did for `rel` (deliberately not by calling `_dsh_artifact_allowed()`, which would re-read the registry once per item). Such a row renders greyed with `不可预览` / `已不在` instead of a file size, and clicking it explains why rather than showing a blank preview.
+- Every previewable row gained a `↗` button (visible on hover, right-aligned) that opens the raw file in a new tab without going through the preview overlay — `openArtifactRawIdx()`.
+- The text/code branch of the previewer now checks `response.ok` before rendering, so an HTTP 403 from the endpoint can no longer be printed as if it were the file's contents.
+- The three states are now: previewable (size shown), registered but out of reach (`不可预览` + reason), and gone from disk (`已不在`). Verified in the browser against the real project: `设计总负责DSH-1`'s `T87_环境火系AOE_动效方向预览_v0.1.md` renders in full above the person card, and `DSH2`'s `/tmp/*.py` entries show the explanation.
+
+### The right column is the board's own summary
+
+- The chart's right column used to be four unrelated cards (`在等你` / `未闭合事项` / `决策沉淀` / `最近发生`). It is now three, and the middle one is deliberately a summary of the task board — because that is what it always was, only it did not say so.
+- `任务板` card: a stage bar plus a legend that use the board's own stage words and status dot colours (`待办` dim, `进行中` blue, `待验收` amber, `阻塞` red, `已完成` green — `.c-done` is defined for the first time here). Stages with a zero count are omitted rather than printed as an empty row. Below it, the same open-item list as before (`未闭合 N`).
+- The entry point into the board lives in that card's title row: `展开 →`. The arrow slides right on hover; clicking it calls the same `openBoard()` the top bar uses, so the board opens as a full page with the current project carried over. No overlay, no new navigation logic.
+- `决策沉淀` is gone from the chart, along with its now-dead CSS (`.decision-item`, `.d-title`, `.d-body`, `.d-meta`). Decisions are still the board's data and are still listed on the board page.
+
+### Tests
+
+- `tests/t11_side_panel_test.js` (new, 49 cases) extracts the real `renderSide()` from `org_chart.html` and runs it against synthetic boards: three-card structure, `展开 →` wired to `openBoard()` with the project parameter, stage segments/legend counts per status, `阻塞`, the six-row open-item list and its exclusion rules (no `user`-assigned items, no `done` items), the empty-board case, and HTML escaping of task titles. `.decision-item` and `决策沉淀` must not reappear anywhere in the file.
+- `tests/t12_artifact_preview_test.js` (new, 30 cases) pins the layering that caused the "nothing happens" bug: `#artPreview` must out-rank `.modal-mask`, the row template must branch on `previewable` and carry the `↗` handler, the previewer must keep its `!response.ok` guard, and the list endpoint must keep emitting `previewable`/`reason`.
+- Full suite: T5 27/27, T6 12/12, T7 22/22, T8 13/13, T9 36/36, T10 82/82, T11 49/49, T12 30/30.
+
 ## v2.20.15 — The board is a page of its own, not an overlay
 
 - The chart's `看板` button used to load the board into a full-screen `<iframe>` on top of the organisation view. It now navigates there: both pages are peers, the browser's own back button does the return trip, and the board's `组织视图` button brings you back exactly the other way.
