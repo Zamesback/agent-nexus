@@ -585,6 +585,13 @@
   .dsh-input-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 9px 12px; font-size: 13px; outline: none; }
   .dsh-input-row input:focus { border-color: var(--line-2); }
   .dsh-input-row button { white-space: nowrap; }
+  /* v2.20.21：语音输入 */
+  .voice-hint { display: none; margin-top: 6px; font-size: 11px; line-height: 1.5; color: var(--dim); font-family: var(--mono); }
+  .voice-hint.show { display: block; }
+  .voice-hint.err { color: var(--amber); }
+  #dshMicBtn.listening { border-color: var(--accent); color: var(--accent); animation: voicePulse 1.2s ease-in-out infinite; }
+  #dshMicBtn:disabled { opacity: .45; cursor: not-allowed; }
+  @keyframes voicePulse { 0%, 100% { opacity: 1 } 50% { opacity: .4 } }
 </style>
 </head>
 <body>
@@ -1605,8 +1612,10 @@ function openPerson(agentId) {  const a = agentById[agentId];
         <div class="dsh-msgs" id="dshMsgs">${renderDshHistory()}</div>
         <div class="dsh-input-row">
           <input id="dshInput" placeholder="直接给终端 Agent 发指令（实时回复）…" onkeydown="if(event.key==='Enter'&&!event.isComposing)sendToTerminal()">
+          <button class="btn mini" id="dshMicBtn" onclick="toggleDshVoice()" title="语音输入：说话变文字（再点一次停止）">🎤</button>
           <button class="btn primary" id="dshSendBtn" onclick="sendToTerminal()">发送</button>
         </div>
+        <div class="voice-hint" id="dshVoiceHint"></div>
       </div>
       ` : `
       <div class="chat-box">
@@ -1625,6 +1634,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
   if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史（内部也会滚到底）
   if (isTerminalAgent(a)) loadArtifacts();   // v2.20.6：列出该成员写过的交付物（可就地预览）
   if (isTerminalAgent(a)) loadAutoWake();    // v2.20.7：自动唤醒开关状态
+  if (isTerminalAgent(a)) dshVoiceSync();    // v2.20.21：语音输入按钮的可用状态
 }
 function closePerson() { document.getElementById('personModal').classList.remove('show'); }
 
@@ -2146,6 +2156,101 @@ async function toggleAutoWakeUI() {
     autoWakeOn = !!d.enabled;
   } catch (e) { alert('切换失败：' + e.message); return; }
   syncAutoWakeBtn();
+}
+
+/* ===== v2.20.21：语音输入（说话变文字，不引任何依赖）=====
+   用浏览器自带的 Web Speech API。127.0.0.1 属于安全上下文，不需要 https。
+   优先本地识别（processLocally，音频不出机器）；浏览器不支持时退回它自己的默认通道。 */
+let dshRec = null;
+let dshRecBase = '';
+let dshRecFinal = '';
+function dshVoiceSR() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+function dshVoiceHint(text, isErr) {
+  const el = document.getElementById('dshVoiceHint');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'voice-hint' + (text ? ' show' : '') + (isErr ? ' err' : '');
+}
+function dshVoiceSync() {
+  const btn = document.getElementById('dshMicBtn');
+  if (!btn) return;
+  if (!dshVoiceSR()) {
+    btn.disabled = true;
+    btn.textContent = '🚫';
+    btn.title = '这个浏览器没有语音识别（Chrome / Edge 有）';
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = dshRec ? '🔴' : '🎤';
+  btn.classList.toggle('listening', !!dshRec);
+  btn.title = dshRec ? '正在听…再点一次停止' : '语音输入：说话变文字（再点一次停止）';
+}
+async function toggleDshVoice() {
+  if (dshRec) {                          // 再点一次 = 停止
+    const rec = dshRec;
+    dshRec = null;
+    dshVoiceSync();
+    dshVoiceHint('');
+    try { rec.stop(); } catch (e) {}
+    return;
+  }
+  const SR = dshVoiceSR();
+  const input = document.getElementById('dshInput');
+  if (!SR || !input) return;
+  const rec = new SR();
+  rec.lang = 'zh-CN';
+  rec.continuous = true;
+  rec.interimResults = true;
+  dshRec = rec;                          // 先亮起来，别让按钮看起来是死的
+  dshVoiceSync();
+  dshVoiceHint('正在准备麦克风……');
+  // 本地识别：能开就开（音频不出机器）。available() 可能迟迟不返回，最多等 1.2 秒。
+  if ('processLocally' in rec && typeof SR.available === 'function') {
+    try {
+      const st = await Promise.race([
+        SR.available({ langs: ['zh-CN'], processLocally: true }),
+        new Promise(r => setTimeout(() => r('__timeout__'), 1200)),
+      ]);
+      if (st === 'available') rec.processLocally = true;
+    } catch (e) {}
+  }
+  if (dshRec !== rec) return;            // 等待期间被取消了
+  dshRecBase = input.value ? input.value.replace(/\s+$/, '') + ' ' : '';
+  dshRecFinal = '';
+  rec.onresult = (ev) => {
+    let interim = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const r = ev.results[i];
+      if (r.isFinal) dshRecFinal += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    input.value = dshRecBase + dshRecFinal + interim;
+    input.scrollLeft = input.scrollWidth;
+  };
+  rec.onerror = (ev) => {
+    const m = {
+      'not-allowed': '麦克风被拒绝了——在浏览器里允许一次麦克风权限就行',
+      'service-not-allowed': '浏览器不让用语音服务（可能是权限或网络策略）',
+      'no-speech': '没听到说话',
+      'audio-capture': '找不到麦克风',
+      'network': '语音服务连不上（检查网络；国内网络下 Google 的语音通道可能不通）',
+      'aborted': '语音识别被中断',
+    };
+    dshVoiceHint(m[ev.error] || ('语音识别出错：' + ev.error), true);
+    if (dshRec === rec) { dshRec = null; dshVoiceSync(); }
+  };
+  rec.onend = () => { if (dshRec === rec) { dshRec = null; dshVoiceSync(); dshVoiceHint(''); } };
+  try {
+    rec.start();
+    dshVoiceSync();
+    dshVoiceHint('正在听……说完点一下 🎤 停止，再点发送');
+  } catch (e) {
+    dshRec = null;
+    dshVoiceSync();
+    dshVoiceHint('麦克风启动失败：' + e.message, true);
+  }
 }
 
 async function sendToTerminal() {

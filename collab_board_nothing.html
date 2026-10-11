@@ -2206,15 +2206,29 @@ function renderStats() {
 }
 
 // ===== 渲染：看板 =====
+let boardRenderSig = '';   // v2.20.21：内容没变就别重建 DOM
 function renderBoard() {
   const container = document.getElementById('board-columns');
   const statuses = ['todo', 'in_progress', 'review', 'done', 'blocked'];
+
+  // 2 秒轮询每轮都 innerHTML 重建，会把每列的滚动位置清零（拉到下面立刻弹回顶部）。
+  // 先比内容指纹：没变就原样留着，连闪都不闪。
+  const sig = JSON.stringify(boardData.tasks) + '|' + selectedTaskId;
+  if (sig === boardRenderSig && container.children.length) return;
+  boardRenderSig = sig;
+
+  // 真要重建，就把每列滚动位置记下来，建完放回去。
+  const keep = {};
+  container.querySelectorAll('.board-col').forEach(col => {
+    const body = col.querySelector('.col-body');
+    if (body) keep[col.dataset.status] = body.scrollTop;
+  });
 
   container.innerHTML = statuses.map(status => {
     const cfg = STATUS_CONFIG[status];
     const tasks = boardData.tasks.filter(t => t.status === status);
     return `
-      <div class="board-col ${cfg.colClass}">
+      <div class="board-col ${cfg.colClass}" data-status="${status}">
         <div class="col-header">
           <span>${cfg.label}</span>
           <span class="count">${tasks.length}</span>
@@ -2225,6 +2239,12 @@ function renderBoard() {
       </div>
     `;
   }).join('');
+
+  container.querySelectorAll('.board-col').forEach(col => {
+    const body = col.querySelector('.col-body');
+    const top = keep[col.dataset.status];
+    if (body && top) body.scrollTop = top;
+  });
 }
 
 function renderColEmpty(status) {

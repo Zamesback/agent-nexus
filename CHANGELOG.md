@@ -1,4 +1,14 @@
-## v2.20.20 — A hosted member can no longer read another member's private chat
+## v2.20.21 — Board columns stop jumping back to the top, and a card can take dictation
+
+Two things Zames asked for in one message.
+
+**The board columns no longer scroll back to the top.** Every column is its own scroll container, but the 2-second `loadBoard` poll called `renderBoard()`, which rebuilt all five columns with `innerHTML` on every tick — so any column you had scrolled reset to zero. `renderBoard()` now keeps a fingerprint of the task list plus the selected task and returns early when nothing changed, and when it does rebuild it records each column's `scrollTop` by `data-status` before the rebuild and restores it after. The chat area already had the same guard; the board was the only place that did not.
+
+**A hosted member's card can now take dictation.** Next to 发送 there is a 🎤 button that turns speech into text in the input box, using the browser's own Web Speech API — no new dependency, no audio upload of our own, and `127.0.0.1` is already a secure context so no https is needed. It asks for local recognition first (`SpeechRecognition.available({processLocally: true})`, so the audio never leaves the machine) and falls back to the browser's default channel when that is unavailable. A 🚫 button means this browser has no speech recognition at all (Chrome and Edge do). Errors are explained in Chinese under the input box — including the honest one: on some networks Google's speech channel is simply unreachable. A first click that appeared to do nothing was a real bug, not a missing API: the code awaited `available()` with no bound, so a promise that never settled left the button looking dead. The wait is now capped at 1.2 s, the button turns 🔴 immediately, and cancelling resets it cleanly.
+
+Tests: `tests/t16_board_scroll_test.js` (23 cases — no rebuild when unchanged, scroll restored per column after a rebuild, the fingerprint includes the selected task, empty columns survive) plus the full suite green: T5 27/27, T6 12/12, T7 22/22, T8 13/13, T9 36/36, T10 82/82, T11 49/49, T12 30/30, T13 37/37, T14 114/114, T15 64/64, T16 23/23.
+
+
 
 Reported symptom: Zames told one hosted member something in its own card, and a *different* member acted on it.
 
