@@ -163,6 +163,38 @@ console.log('E. 页面里 .col-body 确实是每列自己的滚动容器');
 ok(/\.col-body\s*\{[^}]*overflow-y:\s*auto/.test(src), '.col-body 有 overflow-y: auto');
 ok(/\.board-columns\s*\{[^}]*display:\s*flex/.test(src), '.board-columns 是 flex 行（五列并排）');
 
+// ---------- F. v2.20.22：拖动沟通区分隔条不卡 + 身份选择器不再被挤成两行 ----------
+console.log('F. 分隔条拖动（冻结消息列宽度 + rAF）与身份选择器尺寸');
+{
+  const s0 = src.indexOf('function initLayoutSplitter() {');
+  const s1 = src.indexOf('// ===== 皮肤系统', s0);
+  ok(s0 > 0 && s1 > s0, '抽到 initLayoutSplitter 源码');
+  const drag = src.slice(s0, s1);
+  ok(/classList\.add\('layout-dragging'\)/.test(drag), '拖动时给 body 挂 layout-dragging');
+  ok(/box\.style\.width = w \+ 'px'/.test(drag), '拖动时把 #chat-messages 钉在像素宽度上（气泡不重排）');
+  ok(/frozen\.el\.style\.width = ''/.test(drag), '松手后解除钉宽');
+  ok(/requestAnimationFrame/.test(drag), '拖动用 rAF 节流（一帧只写一次样式）');
+  ok(/cancelAnimationFrame/.test(drag), '松手时取消未执行的帧');
+  ok(/localStorage\.setItem\(LAYOUT_KEY/.test(drag), '松手后记住宽度');
+  ok(/'46%'/.test(drag) && /dblclick/.test(drag), '双击分隔条重置为 46%');
+
+  ok(/body\.layout-dragging \.chat-area \{ transition: none !important; \}/.test(src),
+     '拖动期间关掉 .chat-area 的宽度过渡（否则像橡皮筋）');
+
+  const ident = src.match(/\.chat-identity \{[\s\S]*?\n  \}/);
+  ok(!!ident, '抽到 .chat-identity 规则');
+  ok(/overflow-x:\s*auto/.test(ident[0]), '.chat-identity 横向可滚');
+  ok(/flex-wrap:\s*nowrap/.test(ident[0]), '.chat-identity 不换行');
+
+  const btnRules = src.match(/\.identity-btn \{[\s\S]*?\n  \}/g) || [];
+  ok(btnRules.length >= 2, `.identity-btn 有两处规则（基础 + 2.0 覆盖），实际 ${btnRules.length}`);
+  ok(btnRules.every(r => /flex:\s*0 0 auto/.test(r)), '每个 .identity-btn 规则都不再 flex:1 被挤扁');
+  ok(btnRules.every(r => /white-space:\s*nowrap/.test(r)), '按钮文字不折行');
+  ok(btnRules.every(r => !/flex:\s*1\s*;/.test(r)), '没有残留 flex: 1 的按钮规则');
+  ok(/title="\$\{a\.name\} · 小圆点 = 该成员在组织架构图上的颜色"/.test(src),
+     '身份按钮的 title 说明了小圆点是什么');
+}
+
 console.log(results.join('\n'));
 console.log(`\nT16 结果：${pass} 通过 / ${fail} 失败`);
 process.exit(fail ? 1 : 0);

@@ -538,6 +538,10 @@
   .layout-splitter.active::after {
     color: var(--red);
   }
+  /* v2.20.22：拖动期间别让 0.15s 的宽度过渡把拖动拖成橡皮筋 */
+  body.layout-dragging { cursor: col-resize; user-select: none; }
+  body.layout-dragging .chat-area { transition: none !important; }
+  body.layout-dragging .chat-messages { pointer-events: none; overflow: hidden; }
   .chat-header {
     padding: 16px 20px 10px;
     border-bottom: 1px solid var(--line);
@@ -1168,12 +1172,18 @@
   }
   .chat-identity {
     display: flex;
-    gap: 6px;
-    margin-bottom: 10px;
+    gap: 5px;
+    margin-bottom: 8px;
+    /* v2.20.22：成员多时横向排一行、可左右滚，别让每个按钮被挤成两行高块 */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
+  .chat-identity::-webkit-scrollbar { height: 0; }
   .identity-btn {
-    flex: 1;
-    padding: 6px 8px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 3px 9px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--line-2);
     background: transparent;
@@ -1762,10 +1772,13 @@
   .ai-thinking { font-family: var(--sans); font-size: 12px; letter-spacing: 0; }
   .identity-btn {
     font-family: var(--sans);
-    font-size: 12px;
+    font-size: 11px;
+    line-height: 1.7;
     text-transform: none;
     letter-spacing: 0;
-    padding: 6px 10px;
+    padding: 3px 9px;
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   .api-form label { font-family: var(--sans); font-size: 12px; }
   .api-section-title { font-family: var(--mono); font-size: 11px; letter-spacing: 1px; }
@@ -2179,6 +2192,7 @@ function renderIdentitySelector() {
     return `
       <button class="identity-btn ${a.id === currentIdentity ? 'active' : ''}"
               style="--agent-color:${color};"
+              title="${a.name} · 小圆点 = 该成员在组织架构图上的颜色"
               onclick="setIdentity('${a.id}')">
         <div class="dot"></div>${a.name}
       </button>
@@ -3255,25 +3269,43 @@ function initLayoutSplitter() {
 
   splitter.addEventListener('mousedown', (e) => {
     e.preventDefault();
+    const bodyW = document.body.getBoundingClientRect().width || 1;
+    const pctAt = (x) => Math.min(75, Math.max(20, ((bodyW - x) / bodyW) * 100));
     splitter.classList.add('active');
+    document.body.classList.add('layout-dragging');   // v2.20.22：拖动期间关掉过渡
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
+    // v2.20.22：拖动期间把消息列钉在当前像素宽度上。
+    // 否则每移动一像素，几百条气泡都要重新折行 → 手感很卡。
+    const box = document.getElementById('chat-messages');
+    let frozen = null;
+    if (box) {
+      const w = box.getBoundingClientRect().width;
+      if (w > 0) {
+        frozen = { el: box, max: box.style.maxWidth };
+        box.style.width = w + 'px';
+        box.style.maxWidth = w + 'px';
+      }
+    }
+
+    let lastX = e.clientX, raf = 0;
     const onMove = (ev) => {
-      const rect = document.body.getBoundingClientRect();
-      const widthPct = ((rect.width - ev.clientX) / rect.width) * 100;
-      const clamped = Math.min(75, Math.max(20, widthPct));
-      chatArea.style.width = clamped + '%';
-      chatArea.style.transition = 'none';
+      lastX = ev.clientX;
+      if (!raf) raf = requestAnimationFrame(() => {   // 一帧只写一次样式
+        raf = 0;
+        chatArea.style.width = pctAt(lastX) + '%';
+      });
     };
     const onUp = (ev) => {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
       splitter.classList.remove('active');
+      document.body.classList.remove('layout-dragging');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      chatArea.style.transition = '';
-      const rect = document.body.getBoundingClientRect();
-      const widthPct = ((rect.width - ev.clientX) / rect.width) * 100;
-      const clamped = Math.min(75, Math.max(20, widthPct));
+      if (frozen) { frozen.el.style.width = ''; frozen.el.style.maxWidth = frozen.max; }
+      const clamped = pctAt(ev.clientX);
+      chatArea.style.width = clamped + '%';
       try {
         localStorage.setItem(LAYOUT_KEY, Math.round(clamped));
       } catch (e) { /* ignore */ }
