@@ -2873,6 +2873,26 @@ def _dsh_append_history(project, agent_id, entries):
         return
     _auto_git_snapshot(project, min_interval=2.0)   # v2.20.6：聊天历史也留版本快照（节流 2s）
 
+def _dsh_context_from_history(project, agent_id, limit=4, clip=400):
+    """v2.20.23：给这一轮对话拼「上文」——只取这个成员自己的历史。
+
+    以前这段是前端算好（dshMsgsCache.slice(-4)）再发过来的，而前端的缓存是全局的：
+    切换成员、或上一轮还在流式输出时，会把别人的近几轮当成上文，于是 B 接着 A 的话题
+    回答。历史文件本来就是按成员隔离的，这里直接用服务端的事实来源。
+    """
+    lines = []
+    for h in (_dsh_load_history(project, agent_id) or [])[-6:]:
+        if h.get("role") not in ("user", "assistant"):
+            continue
+        txt = str(h.get("content") or "").strip()
+        if not txt:
+            continue
+        if len(txt) > clip:
+            txt = txt[:clip].rstrip() + "…"
+        lines.append(("你" if h.get("role") == "user" else "终端 Agent") + "：" + txt)
+    return "\n".join(lines[-limit:])
+
+
 def _dsh_clear_history(project, agent_id):
     import os as _os
     ok = True
@@ -3718,6 +3738,9 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                 _dsh_approval_register(ev.get("requestId"), project, agent_id,
                                        ev.get("timeoutMs"), ev.get("toolName"), ev.get("reason"))
                 ev["type"] = "approval"
+                # v2.20.23：带上成员 id，前端才知道这张审批卡该画在谁的卡里（串话修复）
+                ev["agentId"] = agent_id
+                ev["project"] = project
             elif ev.get("type") == "agentnexus_approval_expired":
                 _dsh_approval_expire(ev.get("requestId"))
                 ev["type"] = "approval_expired"
@@ -3956,6 +3979,13 @@ def _handle_dsh_chat(self, project=None):
     if not message:
         self._send_json({"ok": False, "error": "message 不能为空"}, status=400)
         return
+    # v2.20.23：上下文改由服务端按「这个成员自己的历史」生成，不再采用客户端传来的 context。
+    # 起因（2026-10-11 用户报障）：前端在切换成员、或上一轮还在流式输出时，会把别的成员的
+    # 近几轮当成「上文」发过来，于是 B 接着 A 的话题回答——看起来就是两个成员串话。
+    # 服务端本来就有按成员隔离的历史文件，用它既准确又不受前端时序影响。
+    if context:
+        _dsh_log("忽略客户端 context（%d 字），改用服务端历史" % len(context))
+    context = _dsh_context_from_history(project, agent_id)
     # v2.17：给 dsh 的完整输入 = 上下文 + 新消息；历史落盘只用纯 message
     dsh_input = (context + "\n\n【现在的新消息】" + message) if context else message
     # 4) 复用/新会话（按成员）

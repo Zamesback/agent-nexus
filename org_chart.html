@@ -1517,6 +1517,7 @@ function scrollToBottom(el) {  // v2.20.4：滚到底（立即 + 字体加载后
 }
 function openPerson(agentId) {  const a = agentById[agentId];
   if (!a) return;
+  dshAbortStream();   // v2.20.23：换卡片就断掉上一张卡还在跑的流，免得回复画到新卡上
   currentDshAgent = isTerminalAgent(a) ? agentId : '';
   const st = agentStatus(agentId);
   const color = a.color || colorForAgent(agentId);
@@ -1636,7 +1637,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
   if (isTerminalAgent(a)) loadAutoWake();    // v2.20.7：自动唤醒开关状态
   if (isTerminalAgent(a)) dshVoiceSync();    // v2.20.21：语音输入按钮的可用状态
 }
-function closePerson() { document.getElementById('personModal').classList.remove('show'); }
+function closePerson() { dshAbortStream(); document.getElementById('personModal').classList.remove('show'); }
 
 /* ===== 交付物预览（v2.20.6）=====
    托管 Agent 每次 write/edit/present 都由 server 记进 dsh_artifacts.json，
@@ -2016,9 +2017,15 @@ function isTerminalAgent(a) {
   return a && (a.id === 'terminal' || (a.role || '').includes('终端') || a.entry_type === 'dsh' || (a.entry && a.entry.type === 'dsh'));
 }
 let currentDshAgent = '';  // 当前打开的终端托管成员 id（会话历史按成员隔离）
-let dshMsgsCache = [];      // v2.17：聊天历史缓存（打开卡片时从服务端加载，发送/回复时内存追加）
+// v2.20.23：历史缓存按成员分开存。以前是一个全局数组，切卡片时另一成员还在流式输出的
+// 回复会被 push 进来，于是 B 的「上文」里混进了 A 的话，B 就接着 A 的话题回答（串话）。
+const dshCacheByAgent = {};  // agentId -> [msgs]
+let dshChatCtrl = null;    // v2.20.23：当前这一轮对话的 SSE；离开卡片就断开，免得画到别人卡上
 let dshServerUsage = {};   // 服务端累计用量（project_config dsh.members.<id>.usage）
-function dshHistory() { return dshMsgsCache; }
+function dshHistory() { return dshCacheByAgent[currentDshAgent] || []; }
+function dshAbortStream() {
+  if (dshChatCtrl) { try { dshChatCtrl.abort(); } catch (e) {} dshChatCtrl = null; }
+}
 function dshTotalTokens() { return dshServerUsage.totalTokens || 0; }
 function fmtTokens(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
 async function loadDshHistory() {
@@ -2026,17 +2033,20 @@ async function loadDshHistory() {
   const box = document.getElementById('dshMsgs');
   const usageEl = document.getElementById('dshUsage');
   if (!box) return;
+  const who = currentDshAgent;   // v2.20.23：响应回来时若已切到别的卡片，只存缓存、不动 DOM
   try {
-    const resp = await fetch('/api/dsh/history' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'));
+    const resp = await fetch('/api/dsh/history' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(who || 'terminal'));
     const j = await resp.json();
     if (!j.ok) throw new Error(j.error || '加载失败');
+    dshCacheByAgent[who] = j.history || [];
+    if (who !== currentDshAgent) return;
     dshServerUsage = j.total_usage || {};
-    dshMsgsCache = j.history || [];
-    const h = dshMsgsCache.slice(-30);
+    const h = dshCacheByAgent[who].slice(-30);
     box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content)).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
     scrollToBottom(box);  // v2.20.4：打开卡片时滚动到最近消息
     if (usageEl) usageEl.textContent = '用量：' + fmtTokens(dshTotalTokens());
   } catch (e) {
+    if (who !== currentDshAgent) return;
     box.innerHTML = '<div class="work-empty" style="padding:10px 0;">历史加载失败：' + esc2(e.message) + '</div>';
   }
 }
@@ -2078,20 +2088,22 @@ async function clearDshHistory() {
     const resp = await fetch('/api/dsh/history/clear' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'), { method: 'POST' });
     const j = await resp.json();
     if (!j.ok) throw new Error(j.error || '清空失败');
-    dshMsgsCache = [];
+    dshCacheByAgent[currentDshAgent] = [];
     dshServerUsage = {};
     document.getElementById('dshMsgs').innerHTML = '<div class="work-empty" style="padding:10px 0;">会话已清空 —— 下一轮消息将从新上下文开始。</div>';
     document.getElementById('dshUsage').textContent = '用量：0';
   } catch (e) { alert('清空失败：' + e.message); }
 }
-function dshAppend(role, content) {
+function dshAppend(role, content, agentId) {
+  if (agentId && agentId !== currentDshAgent) return;   // v2.20.23：回复属于谁，只画在谁的卡上
   const box = document.getElementById('dshMsgs');
   if (!box) return;
   box.insertAdjacentHTML('beforeend', dshMsgHtml(role, content));
   box.scrollTop = box.scrollHeight;
 }
 // v2.19.3：思考过程折叠块（默认收起，点开看完整推导）
-function appendThinking(text) {
+function appendThinking(text, agentId) {
+  if (agentId && agentId !== currentDshAgent) return;   // v2.20.23
   const box = document.getElementById('dshMsgs');
   if (!box || !text) return;
   const n = document.querySelectorAll('.dsh-thinking').length + 1;
@@ -2258,20 +2270,27 @@ async function sendToTerminal() {
   const btn = document.getElementById('dshSendBtn');
   const text = (input.value || '').trim();
   if (!text) return;
+  // v2.20.23：本轮从头到尾只认这个成员——期间用户切了卡片，回复也不许画到别人卡上
+  const targetAgent = currentDshAgent || 'terminal';
+  const boxFor = () => (targetAgent === currentDshAgent ? document.getElementById('dshMsgs') : null);
+  const actFor = () => (targetAgent === currentDshAgent ? document.getElementById('dshActivity') : null);
   input.value = '';
-  dshAppend('user', text);
-  dshMsgsCache.push({ role: 'user', content: text });  // v2.17：用户消息进缓存（服务端已同步落盘）
+  dshAbortStream();
+  dshChatCtrl = new AbortController();
+  dshAppend('user', text, targetAgent);
+  (dshCacheByAgent[targetAgent] = dshCacheByAgent[targetAgent] || []).push({ role: 'user', content: text });  // v2.17：用户消息进缓存（服务端已同步落盘）
   btn.disabled = true; btn.textContent = '回复中…';
-  const h = dshHistory();
+  const h = dshCacheByAgent[targetAgent] || [];
   const histCtx = h.slice(-4).map(m => (m.role === 'user' ? '你' : '终端 Agent') + '：' + (m.content || '')).join('\n');
-  const payload = { message: text, context: histCtx || '', session_id: '' };  // v2.17：纯消息落盘，上下文独立传
+  const payload = { message: text, context: histCtx || '', session_id: '' };  // v2.17：纯消息落盘，上下文独立传（v2.20.23 起服务端只用自己的历史）
   try {
-    const resp = await fetch('/api/dsh/chat' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(currentDshAgent || 'terminal'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    const resp = await fetch('/api/dsh/chat' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') + '&agent=' + encodeURIComponent(targetAgent), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      signal: dshChatCtrl.signal
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      dshAppend('assistant', '⚠️ ' + (err.error || ('HTTP ' + resp.status)));
+      dshAppend('assistant', '⚠️ ' + (err.error || ('HTTP ' + resp.status)), targetAgent);
       return;
     }
     const reader = resp.body.getReader();
@@ -2292,11 +2311,11 @@ async function sendToTerminal() {
         if (t === 'session') continue;
         if (t === 'status') {  // v2.19.3：步骤进展可见——「正在工作中 · 第 N 步」
           const ph = ev.phase || '';
-          const act = document.getElementById('dshActivity');
+          const act = actFor();
           if (ph === 'step_start') {
             if (act) act.innerHTML = '<span class="who">终端 Agent</span>⏳ 正在工作中 · 第 ' + (ev.step || 1) + ' 步…';
             else {
-              const box = document.getElementById('dshMsgs');
+              const box = boxFor();
               if (box) box.insertAdjacentHTML('beforeend', '<div class="dsh-msg thinking" id="dshActivity"><span class="who">终端 Agent</span>⏳ 正在工作中 · 第 ' + (ev.step || 1) + ' 步…</div>');
             }
           } else if (ph === 'turn_end' && act) {
@@ -2305,7 +2324,7 @@ async function sendToTerminal() {
           continue;
         }
         if (t === 'thinking') {  // v2.19.3：思考过程折叠可见（可展开）
-          appendThinking(ev.text);
+          appendThinking(ev.text, targetAgent);
           continue;
         }
         if (t === 'approval') {
@@ -2321,17 +2340,17 @@ async function sendToTerminal() {
           continue;
         }
         if (t === 'dsh_error') {  // v2.19.3：模型/上游错误可见，不再静默卡住
-          const act = document.getElementById('dshActivity'); if (act) act.remove();
-          dshAppend('assistant', '⚠️ ' + (ev.error || '会话异常'));
+          const act = actFor(); if (act) act.remove();
+          dshAppend('assistant', '⚠️ ' + (ev.error || '会话异常'), targetAgent);
           gotReply = true;
           continue;
         }
         if (t === 'text') {
-          const act = document.getElementById('dshActivity'); if (act) act.remove();
+          const act = actFor(); if (act) act.remove();
           replyContent = ev.text || '';
-          if (!gotReply) { dshAppend('assistant', replyContent); gotReply = true; }
+          if (!gotReply) { dshAppend('assistant', replyContent, targetAgent); gotReply = true; }
           else {
-            const box = document.getElementById('dshMsgs');
+            const box = boxFor();
             const last = box ? box.lastElementChild : null;
             if (last && last.classList.contains('dsh-msg')) dshSetBody(last, 'assistant', replyContent);
           }
@@ -2340,30 +2359,36 @@ async function sendToTerminal() {
         if (t === 'final') {
           if (ev.text && ev.text !== replyContent) {
             replyContent = ev.text;
-            const box = document.getElementById('dshMsgs');
+            const box = boxFor();
             const last = box ? box.lastElementChild : null;
             if (last && last.classList.contains('dsh-msg')) dshSetBody(last, 'assistant', replyContent);
           }
           continue;
         }
         if (t === 'dsh_done') {
-          const act = document.getElementById('dshActivity'); if (act) act.remove();  // v2.19.3 兜底
-          if (!ev.ok && replyContent === '' && !gotReply) dshAppend('assistant', '⚠️ 会话未完成（超时或进程中断），没有产出回复。');  // v2.19.3 不再静默
+          const act = actFor(); if (act) act.remove();  // v2.19.3 兜底
+          if (!ev.ok && replyContent === '' && !gotReply) dshAppend('assistant', '⚠️ 会话未完成（超时或进程中断），没有产出回复。', targetAgent);  // v2.19.3 不再静默
           const usage = ev.usage || {};
           const total = ev.total_usage || {};
-          dshMsgsCache.push({ role: 'assistant', content: replyContent, usage: { inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0, totalTokens: usage.totalTokens || 0 } });
-          dshServerUsage = total;  // v2.17：用量以服务端为准
-          const box = document.getElementById('dshMsgs');
+          // v2.20.23：回复只进它自己那个成员的历史缓存——以前进的是全局数组，会把别人的「上文」串进来
+          (dshCacheByAgent[targetAgent] = dshCacheByAgent[targetAgent] || []).push({ role: 'assistant', content: replyContent, usage: { inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0, totalTokens: usage.totalTokens || 0 } });
+          const box = boxFor();
           if (box && box.lastElementChild) {
             box.lastElementChild.insertAdjacentHTML('beforeend', `<div class="dsh-usage">⟐ in ${fmtTokens(usage.inputTokens || 0)} / out ${fmtTokens(usage.outputTokens || 0)} / 累计 ${fmtTokens(total.totalTokens || 0)}</div>`);
           }
-          document.getElementById('dshUsage').textContent = '用量：' + fmtTokens((total.inputTokens||0) + (total.outputTokens||0));
+          const usageEl = targetAgent === currentDshAgent ? document.getElementById('dshUsage') : null;
+          if (usageEl) {
+            dshServerUsage = total;  // v2.17：用量以服务端为准
+            usageEl.textContent = '用量：' + fmtTokens((total.inputTokens||0) + (total.outputTokens||0));
+          }
         }
       }
     }
   } catch (e) {
-    dshAppend('assistant', '⚠️ 连接中断：' + e.message);
+    if (e && e.name === 'AbortError') return;   // v2.20.23：切卡片/关卡片主动断开，不是故障
+    dshAppend('assistant', '⚠️ 连接中断：' + e.message, targetAgent);
   } finally {
+    if (dshChatCtrl) dshChatCtrl = null;
     btn.disabled = false; btn.textContent = '发送';
   }
 }
@@ -2488,6 +2513,8 @@ function markApprovalLate(rid, option) {
 function renderApproval(ev) {
   const list = document.getElementById('dshApprovalList');
   if (!list) return;
+  // v2.20.23：审批属于某个成员——别把 A 的审批卡画进 B 的卡里（会让人以为 B 在申请权限）
+  if (ev.agentId && currentDshAgent && ev.agentId !== currentDshAgent) return;
   const rid = ev.requestId || ('r' + Date.now());
   if (document.getElementById('apv-' + rid)) return;  // 去重
   pruneApprovalCards();
