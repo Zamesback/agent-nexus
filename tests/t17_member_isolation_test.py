@@ -121,7 +121,12 @@ def main():
            "function dshAppend(role, content, agentId)" in html and "if (agentId && agentId !== currentDshAgent) return;" in html)
         ok("appendThinking 同样拦截", "function appendThinking(text, agentId)" in html)
         ok("sendToTerminal 固定 targetAgent", "const targetAgent = currentDshAgent || 'terminal';" in html)
-        ok("boxFor/actFor 只在同一张卡上写", "const boxFor = () =>" in html and "const actFor = () =>" in html)
+        # v2.20.24：actFor 被秒表助手取代（dshActivityShow/Hide 自带成员守卫），
+        # 只保留 boxFor 做「回复只写进发出请求的那张卡」的守卫。
+        ok("boxFor 只在同一张卡上写", "const boxFor = () =>" in html)
+        ok("活动行助手也带成员守卫",
+           "function dshActivityShow(text, agentId)" in html
+           and "if (agentId && agentId !== currentDshAgent) return;" in html)
         ok("请求带 AbortController 信号", "signal: dshChatCtrl.signal" in html)
         ok("切卡片/关卡片会断开流",
            "function dshAbortStream()" in html and "dshAbortStream();   // v2.20.23：换卡片就断掉" in html

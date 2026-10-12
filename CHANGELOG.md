@@ -1,3 +1,64 @@
+## v2.20.24 — "It looks stuck" was a member lock waiting in silence
+
+Zames: "I assign the task, the agent goes off to do it, and then the card looks stuck. I have to close
+the card and open it again to see the result." Nothing was stuck — the second turn of a member was
+waiting for that member's turn to finish, and during that wait the server sent the client **nothing at
+all** after the SSE headers. The browser had a 200 response and an open stream, so the card looked dead.
+
+Measured from the server log: the gap between "调用 _dsh_run" and "进入 _dsh_run" (pure lock wait) was
+up to **410 seconds**, with plenty of 27–187 second waits. Reopening the card worked because the reply
+is written to the member's history the moment `final` arrives, so `loadDshHistory()` finds it.
+
+- The server now emits `status/phase=accepted` immediately after the SSE headers, before touching the
+  lock.
+- If the same member is already running, the waiting turn gets `status/phase=queued` carrying
+  `running_label` ("对话" / "自动唤醒" / "讨论室"), `running_elapsed` and `running_since`; once it
+  acquires the lock it gets `status/phase=dequeued` with the real `waited`.
+- A module-level `_DSH_RUNNING` registry tracks who is actually running, across all three paths
+  (chat, auto-wake, discussion room), exposed as `GET /api/dsh/running?project=`. That is what makes
+  a reopened card say "this member is still running" instead of showing an empty box.
+- The card's activity line is now a stopwatch: it appears the instant you hit send ("已发送，正在唤醒
+  Agent…"), and every status event rewrites it ("已受理，正在准备工作环境…" → "这个成员上一轮还在跑
+  （对话，已 118 秒），你这条排在后面…" → "排队结束（等了 116 秒），正在启动…" → "正在工作中 · 第 N 步…").
+  The circle can no longer spin forever: every exit path stops it.
+- `emit` no longer swallows write failures. A client that hits refresh used to leave zero trace in the
+  log; now the first failure of each run is recorded, which is why this class of bug was invisible before.
+
+Tests: `tests/t18_queue_visibility_test.py` 41/41 (registry semantics, wiring assertions on both sides,
+and two real concurrent `_handle_dsh_chat` turns proving accepted → queued → dequeued), plus a live
+end-to-end run against an isolated server with a deliberately slow fake CLI: 21/21.
+
+## v2.20.23 — Hosted members stop answering each other's conversations
+
+Zames talked to member A, switched to member B, and B answered A's topic. The backend was already
+isolated (per-member history file, per-member session, per-member profile); the leak was entirely in
+the browser:
+
+- `dshMsgsCache` was one global array for every member, and it was posted back as the turn's
+  `context` — so A's reply became "终端 Agent：<A's answer>" in B's prompt.
+- The streaming reply wrote into `#dshMsgs` / `#dshActivity` / `#dshUsage` by id, which after a card
+  switch belong to the new card, and it pushed its result into the shared cache.
+- Neither closing a card nor opening another aborted the stream; a late response could overwrite the
+  card you had just opened.
+
+Now the cache is keyed by member (`dshCacheByAgent`), every DOM write is guarded by the member that
+started the turn, opening/closing a card aborts the previous stream (`AbortController`, AbortError is
+not shown as an error), and the server no longer trusts the client's `context` at all — it rebuilds it
+from that member's own history, clipped to the last 4 turns and 400 characters. Approval cards carry
+`agentId`, so a member's approval never renders inside another member's card.
+
+## v2.20.22 — The board's chat splitter drags cleanly, and the identity row got out of the way
+
+- Dragging the chat/board splitter re-flowed every message bubble in the panel on every mouse move
+  (820+ bubbles), on top of a `width` transition. The drag now pins the message list at its pixel
+  width for the duration, throttles the style write to one per animation frame, suspends the
+  transition, and makes the list `pointer-events: none` — so the pointer never re-enters hundreds of
+  bubbles mid-drag.
+- The member picker under the chat box was `flex: 1` per member, so eleven members each got 1/11 of
+  the width and every button wrapped onto two lines. It is now a single scrollable row of compact
+  pills (`flex: 0 0 auto`, `white-space: nowrap`), with each pill's dot explained in its tooltip: that
+  color is the member's node color on the org chart.
+
 ## v2.20.21 — Board columns stop jumping back to the top, and a card can take dictation
 
 Two things Zames asked for in one message.

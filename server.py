@@ -2237,6 +2237,9 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
         if not lock.acquire(blocking=False):
             _dsh_log("自动唤醒放弃：%s 正在处理其他消息（不排队）" % agent_id)
             return
+        # v2.20.24：登记「这个成员正在跑」——用户随后在卡片里发消息时，服务端据此
+        # 立刻回一个「你在排队」的状态，而不是让他对着一个没有任何动静的卡片等。
+        _dsh_running_set(project, agent_id, _DSH_RUN_LABELS.get("auto_wake", "自动唤醒"))
         try:
             board = load_board(project) or {}
             agent = next((a for a in board.get("agents", []) or [] if a.get("id") == agent_id), None)
@@ -2297,11 +2300,13 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
             if box["text"]:
                 _dsh_append_board_reply(project, agent_id, box["text"], to=[sender] if sender else None)
         finally:
+            _dsh_running_clear(project, agent_id)
             lock.release()
     except Exception as e:
         _dsh_log("自动唤醒失败: %s" % e)
     finally:
         _DSH_WAKE_ACTIVE.discard(key)
+        _dsh_running_clear(project, agent_id)
 
 
 def _append_agent_message(agent_id, agent_name, content, project=None):
@@ -3925,6 +3930,53 @@ def _handle_dsh_approve(self, project=None):
     _dsh_log("审批应答: request=%s option=%s" % (request_id, option))
     self._send_json({"ok": True, "requestId": request_id, "option": option})
 
+
+# ===== v2.20.24：成员级「正在跑」登记 =====
+# 起因（用户报障）：同一个成员的几轮是串行跑的（_DSH_LOCKS 成员锁），
+# 但进入等待的那一轮在拿到锁之前一个字都不发给客户端——卡片上既没有「正在工作」
+# 也没有任何动静，看起来就是「卡住」。日志实测最长静默等待 410 秒。
+# 这张表让服务端能：① 在等锁时告诉前端「你在排队」；② 让重新打开的卡片看到「还在跑」。
+_DSH_RUNNING = {}   # "project:agent" -> {"started": float, "started_str": str, "label": str}
+_DSH_RUN_LABELS = {"chat": "对话", "auto_wake": "自动唤醒", "discuss": "讨论室"}
+
+
+def _dsh_running_set(project, agent_id, label="chat"):
+    _DSH_RUNNING["%s:%s" % (project, agent_id)] = {
+        "started": time.time(),
+        "started_str": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "label": label,
+    }
+
+
+def _dsh_running_clear(project, agent_id):
+    _DSH_RUNNING.pop("%s:%s" % (project, agent_id), None)
+
+
+def _dsh_running_info(project, agent_id):
+    e = _DSH_RUNNING.get("%s:%s" % (project, agent_id))
+    if not e:
+        return None
+    info = dict(e)
+    info["elapsed"] = round(time.time() - e["started"], 1)
+    return info
+
+
+def _dsh_running_list(project=None):
+    out = []
+    for k in list(_DSH_RUNNING.keys()):
+        proj, _, aid = k.partition(":")
+        if project and proj != project:
+            continue
+        info = _dsh_running_info(proj, aid)
+        if not info:
+            continue
+        info["project"] = proj
+        info["agentId"] = aid
+        out.append(info)
+    out.sort(key=lambda x: x.get("started") or 0)
+    return out
+
+
 def _handle_dsh_chat(self, project=None):
     """POST /api/dsh/chat  SSE 流式：留言给终端 Agent（按成员托管），回复实时回传"""
     import subprocess as _sp
@@ -4005,6 +4057,7 @@ def _handle_dsh_chat(self, project=None):
     self.send_header("X-Accel-Buffering", "no")
     self.end_headers()
     _reply_box = {"text": "", "persisted": False}  # server 端累积回复全文（用于历史持久化）
+    _write_failed = [False]                        # v2.20.24：SSE 写失败每轮流只记一次日志
     def emit(ev):
         t = ev.get("type")
         if t in ("text", "final") and ev.get("text"):
@@ -4019,8 +4072,12 @@ def _handle_dsh_chat(self, project=None):
         try:
             self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False) + "\n\n").encode("utf-8"))
             self.wfile.flush()
-        except Exception:
-            pass
+        except Exception as _we:
+            # v2.20.24：这里以前是静默 pass——客户端断开（刷新页面/关标签页）在日志里
+            # 完全看不出来，于是「回复没画出来」永远查不出原因。现在每轮流记一次。
+            if not _write_failed[0]:
+                _write_failed[0] = True
+                _dsh_log("SSE 写入失败（客户端可能已断开）: agent=%s 事件=%s %s" % (agent_id, ev.get("type"), _we))
     _dsh_log("调用 _dsh_run")
     import threading as _th
     _dsh_locks = globals().get("_DSH_LOCKS")
@@ -4028,26 +4085,48 @@ def _handle_dsh_chat(self, project=None):
         globals()["_DSH_LOCKS"] = {}
         _dsh_locks = globals()["_DSH_LOCKS"]
     lock = _dsh_locks.setdefault(project + ":" + agent_id, _th.Lock())
+    # v2.20.24：先把「已受理」发出去，再如实说明「你在排队」。
+    # 从前这里在拿到成员锁之前一个字节都不发，客户端拿到 200 之后可能几十秒到几分钟
+    # 什么都收不到（日志实测最长 410 秒），卡片看起来就是死掉了。
+    emit({"type": "status", "phase": "accepted", "agent": agent_id})
+    _prev_run = _dsh_running_info(project, agent_id)
+    if _prev_run:
+        _dsh_log("进入排队: project=%s agent=%s 上一轮开始于 %s（%s，已跑 %.0f 秒）" % (
+            project, agent_id, _prev_run["started_str"], _prev_run["label"], _prev_run["elapsed"]))
+        emit({"type": "status", "phase": "queued", "agent": agent_id,
+              "running_since": _prev_run["started_str"],
+              "running_label": _prev_run["label"],
+              "running_elapsed": _prev_run["elapsed"],
+              "waited": 0})
+    _queue_t0 = time.time()
     with lock:
-        ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=True)
-        _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
-        if (not ok or not _reply_box["text"]) and session_id:
-            # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
-            # v2.20.11：与自动唤醒同一口径——「进程正常退出但一个字都没说」不算成功。
-            # 以前只看 ok，于是 dsh 因为会话目录不匹配等原因空转退出时，界面既没有回复
-            # 也没有报错，用户看到的就是「Agent 不理我了」。
-            import time as _time
-            _time.sleep(3)
-            ok2, new_sid2, usage2 = _dsh_run(project, agent_id, dsh_input, session_id, emit)
-            _dsh_log("占用重试: ok=%s sid=%s" % (ok2, new_sid2))
-            if not ok2 or not _reply_box["text"]:
-                # 换新会话；此时旧会话已不可用，把上下文一并带上（新会话没有记忆）
-                ok3, new_sid3, usage3 = _dsh_run(project, agent_id, dsh_input, "", emit)
-                _dsh_log("换新会话: ok=%s sid=%s" % (ok3, new_sid3))
-                if ok3:
-                    ok, new_sid, usage = True, new_sid3, usage3
-            elif ok2:
-                ok, new_sid, usage = True, new_sid2, usage2
+        if _prev_run:
+            _waited = round(time.time() - _queue_t0, 1)
+            _dsh_log("排队结束: project=%s agent=%s 等了 %.1f 秒" % (project, agent_id, _waited))
+            emit({"type": "status", "phase": "dequeued", "agent": agent_id, "waited": _waited})
+        _dsh_running_set(project, agent_id, _DSH_RUN_LABELS.get("chat", "对话"))
+        try:
+            ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=True)
+            _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
+            if (not ok or not _reply_box["text"]) and session_id:
+                # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
+                # v2.20.11：与自动唤醒同一口径——「进程正常退出但一个字都没说」不算成功。
+                # 以前只看 ok，于是 dsh 因为会话目录不匹配等原因空转退出时，界面既没有回复
+                # 也没有报错，用户看到的就是「Agent 不理我了」。
+                import time as _time
+                _time.sleep(3)
+                ok2, new_sid2, usage2 = _dsh_run(project, agent_id, dsh_input, session_id, emit)
+                _dsh_log("占用重试: ok=%s sid=%s" % (ok2, new_sid2))
+                if not ok2 or not _reply_box["text"]:
+                    # 换新会话；此时旧会话已不可用，把上下文一并带上（新会话没有记忆）
+                    ok3, new_sid3, usage3 = _dsh_run(project, agent_id, dsh_input, "", emit)
+                    _dsh_log("换新会话: ok=%s sid=%s" % (ok3, new_sid3))
+                    if ok3:
+                        ok, new_sid, usage = True, new_sid3, usage3
+                elif ok2:
+                    ok, new_sid, usage = True, new_sid2, usage2
+        finally:
+            _dsh_running_clear(project, agent_id)
     if not new_sid and ok:
         # 兜底：无 session 事件
         new_sid = "session-" + project + "-" + agent_id
@@ -4387,7 +4466,11 @@ def _discuss_turn(project):
         globals()["_DSH_LOCKS"] = {}
         locks = globals()["_DSH_LOCKS"]
     with locks.setdefault(project + ":" + mid, _dth.Lock()):
-        ok, _new_sid, _usage = _dsh_run(project, mid, _discuss_prompt(room, mid), "", emit, kill_after_final=True)
+        _dsh_running_set(project, mid, _DSH_RUN_LABELS.get("discuss", "讨论室"))
+        try:
+            ok, _new_sid, _usage = _dsh_run(project, mid, _discuss_prompt(room, mid), "", emit, kill_after_final=True)
+        finally:
+            _dsh_running_clear(project, mid)
     room["busy"] = None
     if ok and box["final"]:
         _discuss_msg(project, room, names.get(mid, mid), box["final"])
@@ -4625,6 +4708,12 @@ class CollabHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/dsh/artifact":
             _handle_dsh_artifact(self, project)
+            return
+
+        # API: 成员「正在跑」状态（v2.20.24）——重开卡片时用它显示「还在跑」，
+        # 而不是让一张刚打开的卡片看起来像没人干活。
+        if parsed.path == "/api/dsh/running":
+            self._send_json({"ok": True, "project": project, "running": _dsh_running_list(project)})
             return
 
         # API: 讨论室会议转写（v2.20.18）——纪要卡上的「查看转写」走这里
