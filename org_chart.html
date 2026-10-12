@@ -1602,7 +1602,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
       <div class="splitter-h" id="splitChat" role="separator" aria-orientation="horizontal" aria-label="调整对话记录与终端聊天高度" title="拖动调整上下比例 · 双击复位"></div>
       <div class="chat-box dsh-box" style="flex-direction:column;gap:0;align-items:stretch;">
         <div class="dsh-status">
-          <span class="ok">● 进程托管在线</span><span class="dim">模型：<select id="dshModelSelect" class="dsh-model-select" onchange="changeDshModel(this)"></select></span>
+          <span class="ok">● 进程托管在线</span><span class="dim" id="dshWorkdir" title=""></span><span class="dim">模型：<select id="dshModelSelect" class="dsh-model-select" onchange="changeDshModel(this)"></select></span>
           <span class="dim" id="dshUsage">用量：${fmtTokens(dshTotalTokens())}</span>
           <span class="dsh-status-actions">
             <button class="btn mini" id="awakeBtn" onclick="toggleAutoWakeUI()" title="被 @ 或被派工时自动唤醒本成员（headless 跑一轮，会消耗 token）" style="padding:2px 8px;font-size:11px;">${autoWakeOn ? '⚡ 自动唤醒' : '⛔ 唤醒关'}</button>
@@ -2099,6 +2099,13 @@ async function loadDshHistory() {
     dshCacheByAgent[who] = j.history || [];
     if (who !== currentDshAgent) return;
     dshServerUsage = j.total_usage || {};
+    // v2.20.25：把「工作目录」显示出来——它就是成员的沙箱可写根（写不进去的地方会来问权限）
+    const wdEl = document.getElementById('dshWorkdir');
+    if (wdEl) {
+      const wd = String(j.workdir || '');
+      wdEl.textContent = wd ? '📁 ' + (wd.split('/').filter(Boolean).pop() || wd) : '';
+      wdEl.title = wd ? '工作目录（也是它的沙箱可写根）：' + wd : '';
+    }
     const h = dshCacheByAgent[who].slice(-30);
     box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content)).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
     scrollToBottom(box);  // v2.20.4：打开卡片时滚动到最近消息

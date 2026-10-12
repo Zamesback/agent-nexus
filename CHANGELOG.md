@@ -1,3 +1,41 @@
+## v2.20.25 — A hosted member's working directory is its one writable folder
+
+Zames: the three hosted members of 三国指挥官 can only write inside the tool's own project folder
+(`agent-collab-projects/三国指挥官`), not in the game folder on the Desktop
+(`/Users/zames/Desktop/Project/三国指挥官`), "so they keep asking me for permission one small write at
+a time."
+
+That is true, and it is structural. dsh's sandbox has exactly **one** writable root per run:
+`writableRoots()` (dsh `packages/sandbox/sandbox/src/roots.ts`) returns
+`[workspaceRoot, '/tmp', os.tmpdir()]` for `workspace-write` — there is no "extra roots" setting
+anywhere — and `SandboxPolicyService.resolve()` (dsh `packages/sandbox/sandbox-policy/src/index.ts`)
+takes that root from `session.header.cwd`, i.e. from the member's **working directory**. Escalations
+to `danger-full-access` are granted as `allowed-once`, so every single write outside the root costs
+another approval card.
+
+So the working directory is the lever:
+
+- `_dsh_run_cwd()` now defaults to the project's own declared workspace (`auto`). For 三国指挥官 that is
+  `/Users/zames/Desktop/Project/三国指挥官`, so the members write the game repository — including `git`
+  operations, which need the repo's `.git` inside the root — without prompting.
+- It falls back to the tool project folder when the project declares no workspace, or when the declared
+  workspace lives *inside* the project folder (the auto-created `<project>/workspace/` subdirectory
+  would otherwise *narrow* what the member can write, down to a folder that is not even its own).
+- `project_config.json` can override it with `dsh.workdir`: `auto` (default) · `workspace` · `data` · an
+  absolute path. A non-existent path is logged and falls back to the project folder.
+- The path is canonicalized (`os.path.realpath`), because on macOS `/var` and `/private/var` are the
+  same place and the session guard compares directory strings; a child process reports the real path.
+- The member card now shows the effective folder (`📁 三国指挥官`, full path in the tooltip), served by
+  `GET /api/dsh/history` as `workdir`.
+- Cost, stated plainly: changing the working directory invalidates that member's recorded dsh session
+  (v2.20.11 guard), so its in-process conversation memory resets once. The board, the member's chat
+  history, its tasks and its deliverables all survive. Files the member used to drop in the tool folder
+  (scratch, probes) now land in the game folder instead — that is the point of the change, and `/tmp`
+  stays writable.
+
+Tests: `tests/t19_workdir_test.py` 25/25 (resolution rules, overrides, session-guard interplay,
+source contracts, and a read-only check of the real 三国指挥官 workspace), plus T5–T18 all green.
+
 ## v2.20.24 — "It looks stuck" was a member lock waiting in silence
 
 Zames: "I assign the task, the agent goes off to do it, and then the card looks stuck. I have to close

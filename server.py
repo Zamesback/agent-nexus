@@ -3521,15 +3521,59 @@ def _dsh_approval_state(request_id):
         return False, "该审批请求已超时自动拒绝", ent
     return True, "", ent
 
-def _dsh_run_cwd(project):
-    """v2.20.10：托管 Agent 的进程工作目录 = 该项目自己的数据目录。
+# v2.20.25：托管 Agent 的工作目录 —— 它同时是 dsh 沙箱**唯一**的可写根
+# dsh 的 workspace-write 可写范围 = 工作目录 + /tmp + os.tmpdir()（见 dsh 的
+# packages/sandbox/sandbox/src/roots.ts），运行时 workspaceRoot 直接取会话 cwd
+# （packages/sandbox/sandbox-policy/src/index.ts 的 resolve()），**没有「额外可写根」这种配置**。
+# 因此要让成员直接写项目仓库（如三国指挥官的游戏目录），只有在「工作目录」上做文章。
+DSH_WORKDIR_DEFAULT = "auto"   # auto | workspace | data | 某个绝对路径
 
-    以前 Popen 不带 cwd，子进程继承 server 的工作目录（launchd 里配的 AgentNexus 源码仓库根），
-    于是所有项目的托管 Agent 共享同一个 cwd，相对路径产物全落进源码仓库的 dsh_work/，跨项目
-    互相污染——一个临时测试项目的 Agent 会把文件写进 AgentNexus 自己的仓库。改成项目数据目录后，
-    每个项目的 Agent 各写各的；解析不到项目时返回 None（沿用继承 cwd，向后兼容）。"""
+
+def _dsh_workdir_mode(project):
+    """项目配置里的 dsh.workdir（缺省 auto）。读不到就当 auto。"""
+    try:
+        dsh = (_dsh_load_cfg(project) or {}).get("dsh") or {}
+        return str(dsh.get("workdir") or DSH_WORKDIR_DEFAULT).strip() or DSH_WORKDIR_DEFAULT
+    except Exception:
+        return DSH_WORKDIR_DEFAULT
+
+
+def _dsh_run_cwd(project):
+    """v2.20.25：托管 Agent 的进程工作目录。
+
+    v2.20.10 起是「项目数据目录」；现在默认改成「项目自己声明的外部工作区」（auto）——
+    三国指挥官因此住在 /Users/zames/Desktop/Project/三国指挥官，成员写游戏仓库、跑 git 都
+    落在沙箱可写根内，不必为每一次写入向用户申请临时提权（那种审批 dsh 只给 allowed-once，
+    所以每次都要再问一遍）。
+
+    退回数据目录的两种情况：项目没声明工作区；声明的路径就在工具数据目录里（那种
+    `<数据目录>/workspace` 自动子目录反而会缩窄成员能写的地方，连自己的产物都写不了）。
+    可用 project_config.json 的 dsh.workdir 覆盖：auto | workspace | data | 绝对路径。
+    解析不到项目时返回 None（沿用继承 cwd，向后兼容）。"""
     p = get_project_path(project)
-    return p if p and os.path.isdir(p) else None
+    # realpath：macOS 上 /var 与 /private/var 同址，而子进程的 process.cwd() 报的是解析后的
+    # 规范路径；_dsh_session_usable 靠路径字符串比目录，两边必须用同一种写法。
+    data_dir = os.path.realpath(p) if p and os.path.isdir(p) else None
+    mode = _dsh_workdir_mode(project)
+    if mode not in ("auto", "workspace", "data"):
+        if os.path.isdir(mode):
+            return os.path.realpath(mode)
+        _dsh_log("dsh.workdir=%r 不是已存在目录，退回项目数据目录" % mode)
+        return data_dir
+    if mode == "data":
+        return data_dir
+    ws = ""
+    try:
+        ws = str(((load_board(project) or {}).get("project_info") or {}).get("workspace") or "").strip()
+    except Exception:
+        ws = ""
+    if ws and os.path.isdir(ws):
+        real = os.path.realpath(ws)
+        data_real = os.path.realpath(data_dir) if data_dir else ""
+        inside_data = bool(data_real) and (real == data_real or real.startswith(data_real + os.sep))
+        if mode == "workspace" or not inside_data:
+            return real
+    return data_dir
 
 
 # v2.20.11：会话与工作目录绑定——dsh 拒绝在 A 目录录制、却从 B 目录恢复的会话
@@ -3623,7 +3667,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                  "——那是别人的任务。需要协作信息就看板上的任务与消息，或直接问 Zames。\n\n%s"
                  % (project, m_name, agent_id, m_role, dsh_input))
     _run_cwd = _dsh_run_cwd(project)
-    _dsh_log("dsh 工作目录: %s" % (_run_cwd or "(继承 server cwd)"))
+    _dsh_log("dsh 工作目录: %s (workdir=%s)" % (_run_cwd or "(继承 server cwd)", _dsh_workdir_mode(project)))
     # v2.20.11：会话与录制目录绑定。目录对不上时 dsh 直接报错退出、一个字都不产出，用户看到的是
     # Agent 永久不回话（之外还要白等 180 秒 watchdog）。这里在起进程之前就把它丢掉，改用新会话。
     if session_id and not _dsh_session_usable(session_id, _run_cwd):
@@ -3861,7 +3905,9 @@ def _handle_dsh_history(self, project=None):
         return
     history = _dsh_load_history(project, agent_id)
     member_cfg = _dsh_member_cfg(project, agent_id)
-    self._send_json({"ok": True, "history": history, "total_usage": member_cfg.get("usage", {})})
+    # v2.20.25：把有效工作目录（= 沙箱可写根）告诉前端，成员卡上显示出来
+    self._send_json({"ok": True, "history": history, "total_usage": member_cfg.get("usage", {}),
+                     "workdir": _dsh_run_cwd(project) or ""})
 
 def _handle_dsh_history_clear(self, project=None):
     """POST /api/dsh/history/clear?project=X&agent=<id>：清空该成员聊天历史 + 会话（session/用量归零）"""
