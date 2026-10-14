@@ -1,3 +1,44 @@
+## v2.20.27 — A long turn now reports before it runs away
+
+Zames, after the v2.20.26 numbers: "好的，按照你的建议来吧。" — the answer to *"is the extra work
+meaningful?"* was: mostly yes, but one turn could still run 100 steps and 34 minutes with nothing
+but "正在工作中 · 第 N 步" on screen. So a turn now has a budget.
+
+**Per-turn budget (soft → firm → hard).** `server.py` counts model steps from the `status.step_start`
+events it already reads and tracks wall-clock time from the moment the child starts. At the soft
+threshold (default 25 steps or 8 minutes) and again at the firm threshold (50 / 16 min) it asks the
+member to wrap up: give a one-or-two-line answer *now*, write what is left into the task card
+(`assignee` = itself) and carry on. At the hard ceiling (80 / 25 min) the process group is killed —
+the same exit path as the watchdog, but logged as `dsh 因单轮预算硬上限终止，交付已有回复` instead of
+pretending it timed out. Thresholds are env-overridable (`AGENTNEXUS_TURN_{SOFT,FIRM,HARD}_{STEPS,SECONDS}`).
+
+**How a reminder reaches a turn that is already running.** dsh's headless CLI reads stdin once to EOF
+before the turn starts and has no socket or signal channel (`packages/bundle/headless/README.md`: "One
+task per run … there is no interactive follow-up"), so the server cannot inject anything from outside.
+In-process there *is* a supported primitive: `agent.steer(message)` (`packages/core/agent/src/runtime-types.ts:231`),
+consumed at the next step boundary. So the approval bridge — already a plugin inside every member
+process — grew a second channel: it polls `nudgeFile` (`config.nudgeFile` → `AGENTNEXUS_NUDGE_FILE` →
+`/tmp/agentnexus_nudges.jsonl`) by byte offset, 400 ms, exactly like the answer file, finds the agent by
+`sessionId` (`ctx.agents.get/list`, plus an `agent/created` listener, with a liveness check), and calls
+`agent.steer(makeUserMessage(text))`. It declares `inject = ['agents']` (cordis does not inject services
+implicitly) and reports `agentnexus_nudge_delivered` / `agentnexus_nudge_failed` on stdout. A failed
+nudge never throws: worst case the member is not reminded, never that a turn dies.
+
+The member profiles get `inject: [agents]` + `nudgeFile` added in place — `_dsh_migrate_all_profiles()`
+runs at startup and `_dsh_ensure_profile` re-checks on every wake, so existing members are upgraded
+without hand-editing `~/.dsh/profiles/`. The identity anchor says so too: 【每轮预算】一轮大约 25 步 /
+8 分钟，到量会收到提醒，收到就先回报一句。
+
+The member card shows it: the activity line gains `⏱ 已跑 8 分钟 / 第 27 步 —— 已请它先回报一句` and
+`⛔ 到单轮硬上限（25 分钟 / 84 步），本轮已收口`.
+
+Tests: `tests/t21_turn_budget_test.py` 55/55 (thresholds, nudge-file rows, source contracts, startup
+profile upgrade, and an in-process end-to-end run of `_dsh_run` against a fake CLI that emits
+`status.step_start` until the hard ceiling kills it) and `tests/t21_nudge_bridge_test.js` 15/15 (fake
+ctx/agent: claims only its own `sessionId`, message shape, `steer` throwing, noise lines). Full
+regression re-run green: T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49, T12 30, T13 37, T14 114,
+T15 64, T16 40, T17 33, T18 41, T19 25, T20 61, T21 55.
+
 ## v2.20.26 — You can see what a member is doing, and only your @ wakes one
 
 Zames, after v2.20.25: "每次对话，他回复的都好慢好慢 … 为什么现在的活会多了4.5倍？那这其实变多的是有意义的活呢？还是无意义的活？"

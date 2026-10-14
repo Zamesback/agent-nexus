@@ -2429,6 +2429,16 @@ async function sendToTerminal() {
           dshActivityPush(dshToolLabel(ev) + '（本轮第 ' + dshToolCount + ' 次工具）', targetAgent);
           continue;
         }
+        if (t === 'budget') {   // v2.20.27：到单轮预算，已请它先回报一句
+          dshActivityPush('⏱ 已跑 ' + dshFmtDur(ev.elapsed || 0) + ' / 第 ' + (ev.steps || 0)
+            + ' 步 —— 已请它先回报一句' + (ev.delivered ? '' : '（提醒投递失败）'), targetAgent);
+          continue;
+        }
+        if (t === 'budget_stop') {   // v2.20.27：到硬上限，本轮强行收口
+          dshActivityPush('⛔ 到单轮硬上限（' + dshFmtDur(ev.elapsed || 0) + ' / '
+            + (ev.steps || 0) + ' 步），本轮已收口', targetAgent);
+          continue;
+        }
         if (t === 'tool_result') {  // v2.20.26：工具失败也要看得见（以前只有转圈）
           if (ev.status === 'error') {
             dshActivityPush('⚠️ 工具失败：' + String(ev.result == null ? '' : ev.result).replace(/\s+/g, ' ').slice(0, 80), targetAgent);

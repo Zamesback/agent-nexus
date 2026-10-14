@@ -20,6 +20,14 @@
  *     `agentnexus_approval_late` (once) instead of being dropped silently.
  *     Answers for *other* members' requests are ignored quietly — the answer
  *     file is shared, and requestIds are globally unique.
+ *
+ * v2.20.27 — turn-budget nudges:
+ *   - polls a second shared file (config.nudgeFile, env AGENTNEXUS_NUDGE_FILE,
+ *     default /tmp/agentnexus_nudges.jsonl) for `agentnexus_nudge` lines and
+ *     hands the text to the running turn with `agent.steer(...)`, which the
+ *     loop consumes at its next step boundary. Emits
+ *     `agentnexus_nudge_delivered` / `agentnexus_nudge_failed` back on stdout.
+ *   - declares `inject = ['agents']` so ctx.agents is reachable.
  */
 'use strict'
 
@@ -54,6 +62,137 @@ function markExpired(requestId) {
     const oldest = expiredIds.values().next().value
     expiredIds.delete(oldest)
   }
+}
+
+// ---------------------------------------------------------------------------
+// v2.20.27：单轮预算提醒（到量先收口回报一句，再接着干）。
+// 服务端把提醒写成一行 NDJSON 追加到共享文件；这里按字节偏移轮询（与应答文件同款），
+// 用 agent.steer() 送进正在跑的那一轮——steer 会在下一个 step 边界被消费。
+// 这里任何异常都不能冒出去：提醒失败最多是没提醒，绝不能弄死一轮。
+// ---------------------------------------------------------------------------
+const NUDGE_DEFAULT_FILE = '/tmp/agentnexus_nudges.jsonl'
+const knownAgents = new Map()   // sessionId（或 agent.id）-> Agent 句柄
+let nudgeChannelStarted = false
+
+function rememberAgent(agent) {
+  try {
+    if (!agent) return
+    const sid = (agent.session && agent.session.id) || agent.id
+    if (sid) knownAgents.set(String(sid), agent)
+  } catch (_e) {}
+}
+
+function makeUserMessage(text) {
+  const source = { kind: 'plugin', plugin: 'agentnexus-approval-bridge' }
+  try {
+    // 插件不在 dsh 安装目录里，require 不可能按祖先目录找到 dsh-llm；
+    // 以启动器（process.argv[1]）为基准解析才有机会成功。
+    const { createRequire } = require('module')
+    const base = process.argv[1] || __filename
+    const mod = createRequire(base)('@deepseek-ai/dsh-llm')
+    if (mod && typeof mod.createUserMessage === 'function') {
+      return mod.createUserMessage({ content: [{ type: 'text', text }], source })
+    }
+  } catch (_e) {}
+  // 回退：品牌串在运行期是恒等函数，自己搓一个 user 消息即可。
+  let id = ''
+  try { id = require('crypto').randomUUID() } catch (_e) {}
+  if (!id) id = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10)
+  return { id, role: 'user', content: [{ type: 'text', text }], source }
+}
+
+function pickAgent(ctx, sessionId) {
+  const want = sessionId ? String(sessionId) : ''
+  if (want && knownAgents.has(want)) return knownAgents.get(want)
+  let list = []
+  try {
+    const reg = ctx.agents
+    if (reg && typeof reg.list === 'function') list = reg.list() || []
+    else if (reg && typeof reg.roots === 'function') list = reg.roots() || []
+  } catch (_e) { list = [] }
+  for (const a of list) {
+    if (!a) continue
+    const sid = (a.session && a.session.id) || a.id
+    if (want ? String(sid) === want || String(a.id) === want : list.length === 1) return a
+  }
+  return null
+}
+
+function isAlive(ctx, agent) {
+  try {
+    const reg = ctx.agents
+    if (reg && typeof reg.get === 'function') return reg.get(agent.id) === agent
+  } catch (_e) { return false }
+  return true
+}
+
+function deliverNudge(ctx, msg) {
+  const sessionId = msg && msg.sessionId ? String(msg.sessionId) : ''
+  const text = (msg && typeof msg.text === 'string' && msg.text) || ''
+  if (!text) return
+  try {
+    const agent = pickAgent(ctx, sessionId)
+    if (!agent || !isAlive(ctx, agent)) {
+      dbg('nudge dropped (no live agent for session ' + (sessionId || '?') + ')')
+      emitEvent({ type: 'agentnexus_nudge_failed', sessionId, level: msg.level,
+                  error: 'no live agent', ts: Date.now() })
+      return
+    }
+    const message = makeUserMessage(text)
+    if (typeof agent.steer === 'function') agent.steer(message)
+    else if (typeof agent.followup === 'function') agent.followup(message)
+    else {
+      emitEvent({ type: 'agentnexus_nudge_failed', sessionId, level: msg.level,
+                  error: 'agent has no steer/followup', ts: Date.now() })
+      return
+    }
+    dbg('nudge delivered (level ' + msg.level + ') to ' + agent.id)
+    emitEvent({ type: 'agentnexus_nudge_delivered', sessionId, level: msg.level,
+                agentId: String(agent.id), ts: Date.now() })
+  } catch (e) {
+    dbg('nudge failed: ' + String(e))
+    emitEvent({ type: 'agentnexus_nudge_failed', sessionId, level: msg.level,
+                error: String(e), ts: Date.now() })
+  }
+}
+
+function ensureNudgeChannel(ctx, nudgeFile) {
+  if (nudgeChannelStarted) return
+  nudgeChannelStarted = true
+  const filePath = nudgeFile || process.env.AGENTNEXUS_NUDGE_FILE || NUDGE_DEFAULT_FILE
+  dbg('nudge file: ' + filePath)
+  let offset = 0
+  try {
+    if (fs.existsSync(filePath)) offset = fs.statSync(filePath).size
+  } catch (_e) {}
+  const poll = setInterval(() => {
+    try {
+      if (!fs.existsSync(filePath)) return
+      const size = fs.statSync(filePath).size
+      if (size <= offset) return
+      const fd = fs.openSync(filePath, 'r')
+      let text = ''
+      try {
+        const buf = Buffer.alloc(size - offset)
+        fs.readSync(fd, buf, 0, buf.length, offset)
+        offset = size
+        text = buf.toString('utf8')
+      } finally {
+        fs.closeSync(fd)
+      }
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        let msg = null
+        try { msg = JSON.parse(trimmed) } catch (_e) { continue }
+        if (!msg || msg.type !== 'agentnexus_nudge') continue
+        deliverNudge(ctx, msg)
+      }
+    } catch (_e) {
+      /* transient fs errors are non-fatal */
+    }
+  }, 400)
+  process.on('exit', () => { clearInterval(poll) })
 }
 
 function ensureAnswerChannels(answerFile, timeoutMs) {
@@ -163,8 +302,24 @@ function ensureAnswerChannels(answerFile, timeoutMs) {
 module.exports = function agentnexusApprovalBridge(ctx, config = {}) {
   const timeoutMs = Number(config.timeoutMs) > 0 ? Number(config.timeoutMs) : 300000
   const answerFile = typeof config.answerFile === 'string' ? config.answerFile : ''
+  const nudgeFile = typeof config.nudgeFile === 'string' ? config.nudgeFile : ''
 
   ensureAnswerChannels(answerFile, timeoutMs)
+  // v2.20.27：单轮预算提醒通道（send 端在 server.py 的 _dsh_nudge_send）
+  ensureNudgeChannel(ctx, nudgeFile)
+
+  // v2.20.27：记住本进程的 agent，提醒要按 sessionId 找到它。
+  // 拿 agent 的两个来源：注册表里已有的，以及之后 agent/created 事件里的。
+  try {
+    if (ctx.agents && typeof ctx.agents.list === 'function') {
+      for (const a of ctx.agents.list() || []) rememberAgent(a)
+    }
+  } catch (_e) { /* 服务不可用时安静跳过 */ }
+  try {
+    if (typeof ctx.on === 'function') {
+      ctx.on('agent/created', (payload) => { rememberAgent(payload && payload.agent) })
+    }
+  } catch (_e) { /* 非致命 */ }
 
   try {
     process.stdout.write(
@@ -176,6 +331,7 @@ module.exports = function agentnexusApprovalBridge(ctx, config = {}) {
   }
 
   ctx.on('approval/request', async (req, next) => {
+    rememberAgent(req && req.agent)   // v2.20.27：顺手把这轮的 agent 记下来
     const callId = req && req.callId ? String(req.callId) : ''
     const requestId =
       callId ||
@@ -226,3 +382,7 @@ module.exports = function agentnexusApprovalBridge(ctx, config = {}) {
     })
   })
 }
+
+// v2.20.27：cordis 只注入 inject 里点名的服务，否则访问 ctx.agents 会直接抛
+// `cannot get property "agents" without inject`。提醒通道需要 agents。
+module.exports.inject = ['agents']

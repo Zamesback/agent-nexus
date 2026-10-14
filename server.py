@@ -2799,6 +2799,27 @@ def _dsh_ensure_profile(project, agent_id, agent_name=None, agent_role=None):
                     _dsh_log("成员 profile 同步审批桥段: %s" % tgt_dir)
         except Exception as e:
             _dsh_log("成员 profile 同步失败 %s: %s" % (tgt_dir, e))
+        # v2.20.27：审批桥行升级——补 inject: [agents]（提醒通道要访问 ctx.agents，cordis 不做隐式注入）
+        # 与 nudgeFile（单轮预算提醒的共享文件）。对已存在的成员 profile 就地补齐。
+        try:
+            body = open(tgt_patch, encoding="utf-8").read()
+            name_line = "      name: '@deepseek-ai/dsh-agentnexus-approval-bridge'\n"
+            ans_line = '        answerFile: "/tmp/agentnexus_answers.jsonl"\n'
+            changed = False
+            if "agentnexus-approval-bridge" in body:
+                if name_line in body and "inject: [agents]" not in body:
+                    body = body.replace(name_line, name_line + "      inject: [agents]\n", 1)
+                    changed = True
+                if ans_line in body and "nudgeFile" not in body:
+                    body = body.replace(
+                        ans_line,
+                        ans_line + '        nudgeFile: "/tmp/agentnexus_nudges.jsonl"\n', 1)
+                    changed = True
+            if changed:
+                open(tgt_patch, "w", encoding="utf-8").write(body)
+                _dsh_log("成员 profile 审批桥段升级（inject + nudgeFile）: %s" % tgt_dir)
+        except Exception as e:
+            _dsh_log("审批桥段升级异常 %s: %s" % (tgt_dir, e))
         # v2.18：同步审批桥插件链接到成员 profile 的 node_modules（缺失则插件加载失败、进程秒退）
         try:
             pkgs_dir = _os.path.join(tgt_dir, "node_modules", "@deepseek-ai")
@@ -2980,6 +3001,57 @@ def _dsh_audit_history_read(names, agent_id, tool, inp):
             _dsh_log("越界读取他人私聊记录: agent=%s tool=%s 命中=%s" % (agent_id, tool, name))
             return True
     return False
+
+def _dsh_migrate_all_profiles():
+    """v2.20.27：启动时把所有已有托管成员的 profile 升级一遍（补 inject + nudgeFile）。
+
+    _dsh_ensure_profile 里的就地升级只在成员下一次开口时才跑；单轮预算提醒是
+    「谁在跑就要能提醒到谁」，所以启动时统一补，别让第一个长跑的人白白错过。
+    """
+    import os as _os
+    upgraded, total = 0, 0
+    try:
+        root = _os.path.abspath(PROJECTS_ROOT)
+        if not _os.path.isdir(root):
+            return
+        for proj in sorted(_os.listdir(root)):
+            pdir = _os.path.join(root, proj)
+            bfile = _os.path.join(pdir, "collab_board.json")
+            if not _os.path.isfile(bfile):
+                continue
+            try:
+                with open(bfile, encoding="utf-8") as fh:
+                    board = json.load(fh)
+            except Exception:
+                continue
+            for a in (board.get("agents") or []):
+                if not isinstance(a, dict) or not _dsh_is_terminal_member(proj, a):
+                    continue
+                agent_id = a.get("id")
+                if not agent_id:
+                    continue
+                total += 1
+                tgt = _os.path.join(_dsh_member_profile_dir(proj, agent_id), "cordis.patch.yml")
+                before = ""
+                try:
+                    before = open(tgt, encoding="utf-8").read()
+                except Exception:
+                    continue
+                if "nudgeFile" in before and "inject: [agents]" in before:
+                    continue
+                _dsh_ensure_profile(proj, agent_id, a.get("name"), a.get("role"))
+                after = ""
+                try:
+                    after = open(tgt, encoding="utf-8").read()
+                except Exception:
+                    pass
+                if after and "nudgeFile" in after:
+                    upgraded += 1
+                    _dsh_log("托管成员 profile 已升级: %s/%s" % (proj, agent_id))
+        if total:
+            _dsh_log("启动时托管成员 profile 检查完成: 共 %d 个，本次升级 %d 个" % (total, upgraded))
+    except Exception as e:
+        _dsh_log("启动时 profile 升级异常: %s" % e)
 
 def _dsh_migrate_all_histories():
     """v2.20.20：启动时把旧位置（<项目>/dsh_chat/）的私聊记录一次性搬走。
@@ -3664,6 +3736,55 @@ def _dsh_session_usable(session_id, cwd):
     return home == os.path.join(DSH_SESSIONS_ROOT, _dsh_cwd_slug(cwd), session_id)
 
 
+# ===== v2.20.27：单轮预算（到量先回报一次，再接着干） =====
+# 起因：一轮 101 步 / 33.8 分钟，用户在卡片上只看到「正在工作中 · 第 N 步」。
+# 做法：服务端按「步数 / 墙上时间」两个维度看预算，到量把一条提醒写进共享提醒文件；
+# 成员 profile 里的审批桥插件轮询这个文件，用 agent.steer() 把提醒送进正在跑的那一轮
+#   （steer 在下一个 step 边界被消费，不杀进程、不丢活）。
+# 硬上限只是最后兜底：先请它收口两次，还不收口才终止本轮（已有回复照样交付）。
+DSH_NUDGE_FILE = os.environ.get("AGENTNEXUS_NUDGE_FILE", "/tmp/agentnexus_nudges.jsonl")
+
+
+def _budget_env_int(name, default):
+    try:
+        v = int(os.environ.get(name, "") or 0)
+        return v if v > 0 else default
+    except Exception:
+        return default
+
+
+DSH_TURN_SOFT_STEPS = _budget_env_int("AGENTNEXUS_TURN_SOFT_STEPS", 25)
+DSH_TURN_SOFT_SECONDS = _budget_env_int("AGENTNEXUS_TURN_SOFT_SECONDS", 480)
+DSH_TURN_FIRM_STEPS = _budget_env_int("AGENTNEXUS_TURN_FIRM_STEPS", 50)
+DSH_TURN_FIRM_SECONDS = _budget_env_int("AGENTNEXUS_TURN_FIRM_SECONDS", 960)
+DSH_TURN_HARD_STEPS = _budget_env_int("AGENTNEXUS_TURN_HARD_STEPS", 80)
+DSH_TURN_HARD_SECONDS = _budget_env_int("AGENTNEXUS_TURN_HARD_SECONDS", 1500)
+DSH_NUDGE_TEXT = {
+    1: ("【预算提醒】这一轮你已经用了 {mins} 分钟 / {steps} 步。按【先答后干 · 长活收口】："
+        "先用一两行说清「现在做到哪、结论是什么、还剩什么」，把剩下的写进任务卡"
+        "（assignee 写你自己），然后继续做完；不要开新战线。"),
+    2: ("【预算提醒 · 第二次】这一轮已经 {mins} 分钟 / {steps} 步，该收口了："
+        "现在就给结论（做到哪、结果如何、还剩什么），把未完的活写进任务卡"
+        "（assignee 写你自己）后结束本轮。"),
+}
+
+
+def _dsh_nudge_send(session_id, level, text):
+    """把一条预算提醒追加进共享提醒文件（桥接插件按 sessionId 认领并 steer 进去）。"""
+    if not session_id:
+        _dsh_log("预算提醒跳过：还不知道 session_id，无法定位成员")
+        return False
+    line = json.dumps({"type": "agentnexus_nudge", "sessionId": session_id, "level": level,
+                       "text": text, "ts": time.time()}, ensure_ascii=False)
+    try:
+        with open(DSH_NUDGE_FILE, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+        return True
+    except Exception as e:
+        _dsh_log("预算提醒写入失败: %s" % e)
+        return False
+
+
 def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=False):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)
     kill_after_final：讨论场景专用——收到 final（最终回复）即终止进程。
@@ -3709,7 +3830,10 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                  "【能合并就合并】同一个文件的多处改动尽量合并进一次 edit / write，"
                  "不要把十几处小改拆成十几次单步（每一步都要重发全部上下文，代价很大）。\n"
                  "【长活收口】若做了二三十步还没给 Zames 结论，先停下来回一句进度与结论，"
-                 "把剩下的活写进看板任务卡（assignee 写自己），下一轮接着做。\n\n%s"
+                 "把剩下的活写进看板任务卡（assignee 写自己），下一轮接着做。\n"
+                  # v2.20.27：把预算写进提示词，让它心里有数（服务端到点还会 steer 提醒一次）
+                  "【每轮预算】一轮大约 25 步 / 8 分钟。到量时服务端会提醒你一次；"
+                  "收到提醒就按上面【先答后干】先回一句结论，把剩下的写进任务卡，再接着做。\n\n%s"
                  % (project, m_name, agent_id, m_role, dsh_input))
     _run_cwd = _dsh_run_cwd(project)
     _dsh_log("dsh 工作目录: %s (workdir=%s)" % (_run_cwd or "(继承 server cwd)", _dsh_workdir_mode(project)))
@@ -3735,14 +3859,63 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
         # v2.20.2：改为空闲检测——最后事件后 180s 无任何进展才终止；
         # 正常工作的长任务（持续发 status/tool_call/thinking）不再被固定 180s 误砍。
         _wd_stop = [False]
+        _wd_reason = [""]        # v2.20.27：watchdog / budget / final——正常收尾不再被写成「超时」
         _last_evt = [time.time()]
+        _t0 = [time.time()]      # v2.20.27：预算按墙上时间算（用户在等的就是这个时间）
+        _steps = [0]             # v2.20.27：本轮步数（status.step_start 的 step）
+        _sid_ref = [session_id]  # v2.20.27：提醒按 sessionId 投给桥接插件
+        _nudged = set()          # v2.20.27：已发过的提醒级别，只发一次
+        _hard_stopped = [False]
+        def _budget_kill(reason):
+            _wd_reason[0] = reason
+            _wd_stop[0] = True
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                pass
+            try:
+                proc.kill()
+            except Exception:
+                pass
         def _watchdog():
             try:
                 while True:
-                    _time.sleep(20)
+                    _time.sleep(5)
                     if _wd_stop[0]:
                         break
+                    _elapsed = _time.time() - _t0[0]
+                    # v2.20.27：到量先请它回报（steer，不杀进程）；两级之后才兜底终止
+                    for _lvl, _s_th, _t_th in ((1, DSH_TURN_SOFT_STEPS, DSH_TURN_SOFT_SECONDS),
+                                               (2, DSH_TURN_FIRM_STEPS, DSH_TURN_FIRM_SECONDS)):
+                        if _lvl in _nudged:
+                            continue
+                        if _steps[0] >= _s_th or _elapsed >= _t_th:
+                            _nudged.add(_lvl)
+                            _text = DSH_NUDGE_TEXT[_lvl].format(mins=int(_elapsed // 60), steps=_steps[0])
+                            _sent = _dsh_nudge_send(_sid_ref[0], _lvl, _text)
+                            _dsh_log("单轮预算提醒 L%s: agent=%s steps=%s elapsed=%ss 已投递=%s"
+                                     % (_lvl, agent_id, _steps[0], int(_elapsed), _sent))
+                            if emit:
+                                try:
+                                    emit({"type": "budget", "level": _lvl, "steps": _steps[0],
+                                          "elapsed": round(_elapsed, 1), "delivered": bool(_sent)})
+                                except Exception:
+                                    pass
+                    if not _hard_stopped[0] and (_steps[0] >= DSH_TURN_HARD_STEPS
+                                                 or _elapsed >= DSH_TURN_HARD_SECONDS):
+                        _hard_stopped[0] = True
+                        _dsh_log("单轮预算到硬上限（%s 步 / %s 秒），终止 pid=%s"
+                                 % (_steps[0], int(_elapsed), proc.pid))
+                        if emit:
+                            try:
+                                emit({"type": "budget_stop", "steps": _steps[0],
+                                      "elapsed": round(_elapsed, 1)})
+                            except Exception:
+                                pass
+                        _budget_kill("budget")
+                        break
                     if _time.time() - _last_evt[0] > 180:
+                        _wd_reason[0] = "watchdog"
                         _wd_stop[0] = True
                         try:
                             os.killpg(proc.pid, signal.SIGKILL)  # v2.20.3：进程组级清理（含子进程）
@@ -3824,8 +3997,15 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
             if ev.get("type") == "session":
                 if ev.get("sessionId"):
                     new_sid = ev["sessionId"]
+                    _sid_ref[0] = new_sid   # v2.20.27：预算提醒要按 sessionId 投递
                 if ev.get("cwd"):
                     _dsh_cwd[0] = ev["cwd"]
+            elif ev.get("type") == "status" and ev.get("phase") == "step_start":
+                # v2.20.27：数步数（step 是本轮内的序号）
+                try:
+                    _steps[0] = max(_steps[0], int(ev.get("step") or 0))
+                except Exception:
+                    pass
             # v2.18：审批桥内部事件 → 前端审批事件（挂起等待用户批准，dsh 进程阻塞等待应答文件）
             # v2.20.6：登记活跃请求，并转发「超时 / 迟到」事件——前端据此让卡片失效
             if ev.get("type") == "agentnexus_approval":
@@ -3871,6 +4051,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                 except Exception:
                     pass
                 try:
+                    _wd_reason[0] = "final"
                     _wd_stop[0] = True
                 except Exception:
                     pass
@@ -3885,7 +4066,14 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                 _dsh_log("dsh 会话录制目录不匹配，立即失败并交由上层换新会话")
                 return (False, new_sid, usage_agg)
             # v2.19.3：watchdog 超时终止——已有流式回复即视为已交付（final 已实时落盘）
-            _dsh_log("dsh 会话超时终止（watchdog），交付已有回复")
+            # v2.20.27：按真实原因记日志。以前 final 正常收尾也会被写成「超时终止」，
+            # 日志里看着像「交付了又超时」，误导排查。
+            if _wd_reason[0] == "budget":
+                _dsh_log("dsh 因单轮预算硬上限终止，交付已有回复")
+            elif _wd_reason[0] == "final":
+                pass   # 「dsh final 已交付」刚刚已记，不重复
+            else:
+                _dsh_log("dsh 会话超时终止（watchdog），交付已有回复")
             return (True, new_sid, usage_agg)
         if proc.returncode != 0:
             _dsh_log("dsh 子进程失败: rc=%s stderr=%s" % (proc.returncode, err[:300]))
@@ -5613,6 +5801,12 @@ def main():
         _dsh_migrate_all_histories()
     except Exception as e:
         _dsh_log("启动时聊天历史迁移异常: %s" % e)
+
+    # v2.20.27：把托管成员的 profile 补上审批桥新配置（inject + nudgeFile）
+    try:
+        _dsh_migrate_all_profiles()
+    except Exception as e:
+        _dsh_log("启动时 profile 升级异常: %s" % e)
 
     try:
         server.serve_forever()
