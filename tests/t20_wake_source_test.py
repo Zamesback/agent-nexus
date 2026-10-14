@@ -205,5 +205,81 @@ ck("日志提示改用任务 assignee", "要派工请用任务 assignee" in log_
 status_woke = _post("Zames", "@dshtest 系统提示", 103)
 ck("（对照）发起人再 @ 一次仍然会唤醒", status_woke is True)
 
+print("\nG) 活动行的真实渲染（假 DOM + 真源码，node 跑）")
+import subprocess
+import json as _j
+
+NODE = ("/Users/zames/Library/Application Support/DoubaoWork/sandbox_runtime/bases/"
+        "98670218a5f0d8bc9b9ebf3f70881304/bin/node")
+
+
+def _pick(pattern):
+    m = re.search(pattern, HTML, re.S)
+    return m.group(0) if m else ""
+
+
+pieces = [
+    _pick(r"let dshAct = \{.*?\};"),
+    _pick(r"let dshToolCount = 0;"),
+    _pick(r"const DSH_TOOL_ICON = \{.*?\};"),
+    _pick(r"function dshToolLabel\(ev\) \{.*?\n\}"),
+    _pick(r"function dshFmtDur\(sec\) \{.*?\n\}"),
+    _pick(r"function dshActivityPaint\(\) \{.*?\n\}"),
+    _pick(r"function dshActivityShow\(text, agentId\) \{.*?\n\}"),
+    _pick(r"function dshActivityPush\(text, agentId\) \{.*?\n\}"),
+]
+ck("抽到 8 段活动行真实源码", all(pieces), str([bool(x) for x in pieces]))
+
+if all(pieces) and os.path.exists(NODE):
+    # 注意：inserts[0] 是 dshActivityShow('已发送…') 的插入，第一次 push 的 HTML 在 inserts[1]。
+    # JS 里不要写行内 // 注释——它会把同一行后面的字段一起吞掉。
+    js = """
+const inserts = [];
+const box = { insertAdjacentHTML: (p, h) => inserts.push(h), scrollTop: 0, scrollHeight: 10 };
+function esc2(s) { return String(s); }
+const document = { getElementById: (id) => (id === 'dshMsgs' ? box : null) };
+function setInterval() { return 1; }
+function clearInterval() {}
+let currentDshAgent = 'A';
+""" + "\n".join(pieces) + """
+const labels = [
+  dshToolLabel({ tool: 'bash', input: { command: 'ls -la /tmp | head -3' } }),
+  dshToolLabel({ tool: 'edit', input: { file_path: '/Users/zames/Desktop/Project/三国指挥官/prototype/m1/index.html' } }),
+  dshToolLabel({ tool: 'grep', input: { pattern: 'spawnFlame', path: '/a/b/index.html' } }),
+  dshToolLabel({ tool: 'weird', input: { a: 1 } }),
+  dshToolLabel({ tool: 'bash', input: { command: 'git status --short' } }),
+];
+dshActivityShow('已发送，正在唤醒 Agent…', 'A');
+dshActivityPush(labels[0] + '（本轮第 1 次工具）', 'A');
+dshActivityPush(labels[1], 'A');
+dshActivityPush(labels[2], 'A');
+dshActivityPush(labels[3], 'A');
+dshActivityPush(labels[4], 'A');
+console.log(JSON.stringify({ labels: labels, first: inserts[1], last: inserts[inserts.length - 1], n: inserts.length }));
+"""
+    path = os.path.join(ROOT, "act_probe.js")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(js)
+    out = subprocess.run([NODE, path], capture_output=True, text=True)
+    try:
+        got = _j.loads((out.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        got = None
+    ck("node 跑通了活动行", got is not None, (out.stderr or "")[:200])
+    if got:
+        lab = got["labels"]
+        ck("bash 显示图标 + 命令头", "🔧 bash" in lab[0] and "ls -la /tmp | head -3" in lab[0], lab[0])
+        ck("edit 只显示文件名", "✏️ edit" in lab[1] and "index.html" in lab[1] and "prototype" not in lab[1], lab[1])
+        ck("grep 显示模式 + 文件", "🔎 grep" in lab[2] and "spawnFlame" in lab[2] and "index.html" in lab[2], lab[2])
+        ck("未知工具不崩且用兜底图标", lab[3].startswith("🛠 weird"), lab[3])
+        last = got["last"]
+        ck("活动行是真实 DOM 插入", got["n"] >= 1 and "<div" in last, last[:120])
+        ck("工具计数写进活动行（第一次 push 的那行）",
+           "本轮第 1 次工具" in got["first"] and "🔧 bash" in got["first"] and "ls -la /tmp" in got["first"],
+           got["first"][:200])
+        ck("只保留最近 4 行（最老的被挤掉）", "ls -la /tmp" not in last)
+        ck("最新一行仍在", "🔧 bash" in last and "git status --short" in last, last[:200])
+        ck("活动行带秒表后缀", "秒" in last and "dsh-act-elapsed" in last)
+
 print("\n结果：%d 通过 / %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
