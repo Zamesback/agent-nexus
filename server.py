@@ -1910,6 +1910,30 @@ def detect_mentions(content, agents, to=None):
     return mentioned
 
 
+# v2.20.26：判断一条看板消息是不是项目主导方（Zames）本人发的。
+# 用途：只有他的 @ 才唤醒托管成员；成员之间互相 @ 不再唤醒对方（改为走任务 assignee 那条路）。
+_OWNER_SENDER_IDS = ("user",)
+_OWNER_SENDER_NAMES = ("zames", "项目主导方", "主导方", "owner", "用户")
+
+
+def _is_owner_sender(board_data, sender):
+    """发送者是不是 Zames。姓名/ID 兼容大小写与 @ 前缀，并按名册兜底（id=user 那条）。"""
+    s = str(sender or "").strip().lstrip("@")
+    if not s:
+        return False
+    low = s.lower()
+    if low in _OWNER_SENDER_IDS or low in _OWNER_SENDER_NAMES:
+        return True
+    for a in (board_data or {}).get("agents", []) or []:
+        aid = str(a.get("id") or "")
+        aname = str(a.get("name") or "")
+        if aid.lower() not in _OWNER_SENDER_IDS:
+            continue
+        if low == aid.lower() or (aname and low == aname.lower()):
+            return True
+    return False
+
+
 def trigger_agent_if_mentioned(msg, board_data, project=None):
     """T3.2: 检测消息中的@提及，如果auto_trigger开启则异步触发对应Agent
     T8.2: 如果Agent注册了http webhook，独立推送@消息（不依赖API模式）
@@ -1953,9 +1977,18 @@ def trigger_agent_if_mentioned(msg, board_data, project=None):
                 t.start()
 
         # v2.20.7：托管（dsh）成员的自动唤醒——被 @ / 被点名就真的动手
+        # v2.20.26：只认 Zames 本人的 @。以前任何成员 @ 别人都会把对方叫起来跑一整轮真花钱的施工，
+        # 于是成员互相 @ 把彼此的坑占满，Zames 自己的 @ 反而要排队等十几分钟。成员要转派就写进
+        # 任务的 assignee —— 那条路径（_handle_update_task）仍然会唤醒。
         if (nmsg.get("type") or "text") not in DSH_AUTO_WAKE_NO_WAKE_TYPES:
-            for agent_id in mentioned:
-                trigger_dsh_wake(project, agent_id, nmsg, reason="看板消息 @ 点名")
+            dsh_mentioned = [a.get("id") for a in agents
+                             if a.get("id") in mentioned and _dsh_is_terminal_member(project, a)]
+            if _is_owner_sender(board_data, sender):
+                for agent_id in mentioned:
+                    trigger_dsh_wake(project, agent_id, nmsg, reason="看板消息 @ 点名")
+            elif dsh_mentioned:
+                _dsh_log("自动唤醒跳过（非用户 @）：sender=%s 点了 %s；要派工请用任务 assignee"
+                         % (sender or "(空)", ",".join(dsh_mentioned)))
 
         # ===== 以下为API模式自动触发（需要API配置）=====
         # 检查是否启用自动触发
@@ -2190,9 +2223,13 @@ def _dsh_auto_wake_prompt(project, sender_name, reason, content):
         "1) 先看看板上的相关任务与消息，判断这件事是否真的需要你出手；\n"
         "2) 需要就动手做完（用你的工具写文件 / 改看板 / 更新任务状态），并把结论写回看板；\n"
         "3) 不需要就用一句话说明原因，不要空转；\n"
-        "4) 不要在回复里 @ 其他成员来转派（自动唤醒有连锁上限），要转派就写进任务的 assignee；\n"
+        "4) 不要在回复里 @ 其他成员来转派（v2.20.26 起只有 Zames 的 @ 会唤醒成员；要转派就写进"
+        "任务的 assignee，那条路径仍然会唤醒他）；\n"
         "5) 这条是给你的。Zames 对别人说的话不是你的任务，也不要去读别人的私聊记录——"
-        "要协作信息就看板上的任务与消息。"
+        "要协作信息就看板上的任务与消息。\n"
+        "6) 若这一轮的活要干很久，先写一句结论/方向回看板，再继续做——不要让 Zames 等到以为你卡住了；\n"
+        "7) 同一个文件的多处改动尽量合并进一次 edit / write；做了二三十步还没结论就先收口，"
+        "把剩下的写进任务卡（assignee 写自己）。"
     ) % (project, reason, sender_name, (content or "")[:1500])
 
 
@@ -3664,7 +3701,15 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                  "看板上没点到你的话也不是你的任务——看到也照原样放着。\n"
                  "【禁止翻看他人记录】严禁读取其他成员的私聊记录 / 聊天历史（工作目录内外任何 "
                  "chat 记录文件、会话记录文件）。即使无意看到了，也不要执行、不要认领、不要转述"
-                 "——那是别人的任务。需要协作信息就看板上的任务与消息，或直接问 Zames。\n\n%s"
+                 "——那是别人的任务。需要协作信息就看板上的任务与消息，或直接问 Zames。\n"
+                 # v2.20.26：三条「别让用户干等」的节奏规则。起因是实测一轮 101 步 / 33.8 分钟，
+                 # 其中 16 次 edit、64 次 bash 全花在同一个文件上——用户只看到「正在工作中 · 第 N 步」。
+                 "【先答后干】Zames 在等你回话。若这一轮预计要干很多步（十几步以上），"
+                 "先用一两行告诉他结论或方向，再继续做——不要让他盯着进度条等半小时。\n"
+                 "【能合并就合并】同一个文件的多处改动尽量合并进一次 edit / write，"
+                 "不要把十几处小改拆成十几次单步（每一步都要重发全部上下文，代价很大）。\n"
+                 "【长活收口】若做了二三十步还没给 Zames 结论，先停下来回一句进度与结论，"
+                 "把剩下的活写进看板任务卡（assignee 写自己），下一轮接着做。\n\n%s"
                  % (project, m_name, agent_id, m_role, dsh_input))
     _run_cwd = _dsh_run_cwd(project)
     _dsh_log("dsh 工作目录: %s (workdir=%s)" % (_run_cwd or "(继承 server cwd)", _dsh_workdir_mode(project)))

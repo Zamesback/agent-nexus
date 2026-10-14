@@ -1,3 +1,44 @@
+## v2.20.26 — You can see what a member is doing, and only your @ wakes one
+
+Zames, after v2.20.25: "每次对话，他回复的都好慢好慢 … 为什么现在的活会多了4.5倍？那这其实变多的是有意义的活呢？还是无意义的活？"
+
+It is mostly real work — and the numbers say why it *looks* worse than it is. One 33.8-minute reply
+(DSH2, 19:48 → 20:22) was 101 model steps and 102 tool calls: 64 `bash`, 16 `edit`, 7 `write`,
+15 `read`. Of the ~75.7k output tokens, ~70k characters were tool arguments (real edits, real probes,
+real `git`), and only 3,875 characters were prose — the member was not chatting, it was building.
+Before the working-directory change a typical turn was 5–7 steps, ~130 s, **zero file writes** and a
+permission request instead (53 `approval/asked` across the 64 recorded sessions in the old sandbox
+root). What is genuinely wasted is different: six 100–150 s stalls in that single turn (≈12 of the
+33.8 minutes with no event at all, i.e. upstream latency), one approval that timed out after exactly
+120 s and was rejected while Zames was away, and queueing — a member runs one turn at a time, and
+today the longest wait was 983 s. Per-token speed never changed (~68 → ~60 tok/s).
+
+Three fixes, all approved by Zames:
+
+**1. The member card shows the work, not just a step counter.** `tool_call` / `tool_result` are now
+drawn into the activity line — `🔧 bash · <command head>`, `✏️ edit · index.html`,
+`🔎 grep · <pattern>` — with「本轮第 N 次工具」and the running stopwatch; a failed tool prints
+`⚠️ 工具失败：…`. A 101-step turn used to show nothing but「正在工作中 · 第 34 步…」for half an hour.
+Front-end only: press Cmd+R.
+
+**2. Three pacing rules in every hosted input** (identity anchor, mirrored as rules 6–7 of the
+auto-wake prompt): 【先答后干】if a turn will need more than a dozen steps, answer with the conclusion
+first and keep working; 【能合并就合并】put multiple changes to one file into a single `edit`/`write`
+instead of a dozen one-line steps (each step re-sends the whole context); 【长活收口】if twenty or
+thirty steps pass without a conclusion, stop, report progress, and put the rest on a task card.
+
+**3. Only Zames's @ wakes a hosted member.** New `_is_owner_sender()` (id `user`, name `Zames`,
+with roster fallback) gates the dsh branch of `trigger_agent_if_mentioned()`; a member's @ is logged
+(`自动唤醒跳过（非用户 @）… 要派工请用任务 assignee`) and does **not** start a run. Hand-offs through
+a task's `assignee` still wake the assignee (`_handle_update_task` is untouched), which is what the
+prompt already told members to use.
+
+**Tests**: new `tests/t20_wake_source_test.py` 50/50 — including a real call to
+`trigger_agent_if_mentioned()` with a stubbed thread, proving that `@dshtest` from `Zames` starts a
+wake and the same mention from `planner` does not. Regression: T5 27/27, T6 12/12, T7 22/22,
+T8 13/13, T9 36/36, T10 82/82, T11 49/49, T12 30/30, T13 37/37, T14 114/114, T15 64/64, T16 40/40,
+T17 33/33, T18 41/41, T19 25/25. Server-side changes (2 and 3) need a restart; (1) does not.
+
 ## v2.20.25 — A hosted member's working directory is its one writable folder
 
 Zames: the three hosted members of 三国指挥官 can only write inside the tool's own project folder

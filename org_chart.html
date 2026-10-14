@@ -2035,7 +2035,25 @@ function dshAbortStream() {
    卡片上既没有转圈也没有说明；而且一轮里可能有很长时间没有任何事件（跑 bash、等审批）。
    看起来就像卡死。现在：① 发出即显示「已发送」；② 服务端回 queued 就说清在排队、在等谁；
    ③ 转圈带一个秒表，任何时候都能看出它到底还在不在动。 */
-let dshAct = { agent: null, t0: 0, text: '', timer: null };
+let dshAct = { agent: null, t0: 0, text: '', log: [], timer: null };
+let dshToolCount = 0;   // v2.20.26：本轮已用掉多少次工具（画在活动行里）
+/* v2.20.26：把每一步用的工具画出来——一轮可能三十多分钟、上百步，只显示「第 N 步」等于没显示。
+   bash 显示命令头，edit/write/read 显示文件名。 */
+const DSH_TOOL_ICON = { bash: '🔧', edit: '✏️', write: '✍️', read: '📖', grep: '🔎', glob: '🔎',
+                        present: '📊', job_output: '⏳', job_kill: '⛔', fetch: '🌐', web_fetch: '🌐', web_search: '🔍' };
+function dshToolLabel(ev) {
+  const name = String(ev.tool || ev.name || '工具');
+  const inp = (ev.input && typeof ev.input === 'object') ? ev.input : {};
+  const base = p => String(p || '').split('/').filter(Boolean).slice(-1)[0] || String(p || '');
+  const one = s => String(s || '').replace(/\s+/g, ' ').slice(0, 88);
+  let detail = '';
+  if (name === 'bash') detail = one(inp.command);
+  else if (['edit', 'write', 'read', 'present'].includes(name)) detail = base(inp.file_path || inp.path || inp.file);
+  else if (name === 'grep') detail = one(inp.pattern) + (inp.path ? ' @ ' + base(inp.path) : '');
+  else if (name === 'glob') detail = one(inp.pattern);
+  else { try { detail = one(JSON.stringify(inp)); } catch (e) { detail = ''; } }
+  return (DSH_TOOL_ICON[name] || '🛠') + ' ' + name + (detail ? ' · ' + detail : '');
+}
 function dshFmtDur(sec) {
   sec = Math.max(0, Math.round(sec || 0));
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -2046,7 +2064,8 @@ function dshActivityPaint() {
   const box = (dshAct.agent === currentDshAgent) ? document.getElementById('dshMsgs') : null;
   if (!box) return;
   const secs = dshAct.t0 ? (Date.now() - dshAct.t0) / 1000 : 0;
-  const html = '<span class="who">终端 Agent</span>' + esc2(dshAct.text) +
+  const lines = (dshAct.log && dshAct.log.length) ? dshAct.log : [dshAct.text];
+  const html = '<span class="who">终端 Agent</span>' + esc2(lines.join('\n')) +
                '<span class="dsh-act-elapsed"> · ' + dshFmtDur(secs) + '</span>';
   const el = document.getElementById('dshActivity');
   if (el) el.innerHTML = html;
@@ -2058,6 +2077,19 @@ function dshActivityShow(text, agentId) {
   if (!document.getElementById('dshMsgs')) return;
   dshAct.agent = agentId || currentDshAgent;
   dshAct.text = text;
+  dshAct.log = [text];
+  if (!dshAct.t0) dshAct.t0 = Date.now();
+  dshActivityPaint();
+  if (!dshAct.timer) dshAct.timer = setInterval(dshActivityPaint, 1000);
+}
+function dshActivityPush(text, agentId) {
+  // v2.20.26：往活动行尾部追加一行（最多留 4 行），不重置秒表
+  if (agentId && agentId !== currentDshAgent) return;
+  if (!document.getElementById('dshMsgs')) return;
+  dshAct.agent = agentId || currentDshAgent;
+  dshAct.log = (dshAct.log || []).slice(-3);
+  dshAct.log.push(text);
+  dshAct.text = dshAct.log[dshAct.log.length - 1];
   if (!dshAct.t0) dshAct.t0 = Date.now();
   dshActivityPaint();
   if (!dshAct.timer) dshAct.timer = setInterval(dshActivityPaint, 1000);
@@ -2067,7 +2099,7 @@ function dshActivityHide(agentId) {
   const el = document.getElementById('dshActivity');
   if (el) el.remove();
   if (dshAct.timer) clearInterval(dshAct.timer);
-  dshAct = { agent: null, t0: 0, text: '', timer: null };
+  dshAct = { agent: null, t0: 0, text: '', log: [], timer: null };
 }
 async function loadDshRunning() {
   // v2.20.24：重开卡片时，若这个成员还在跑（比如看板派工唤醒的那一轮），立刻显示出来——
@@ -2343,6 +2375,7 @@ async function sendToTerminal() {
   dshChatCtrl = new AbortController();
   dshAppend('user', text, targetAgent);
   dshAct.t0 = Date.now();   // v2.20.24：秒表从「发出这一句」开始算——卡片从第一秒起就有动静
+  dshToolCount = 0;         // v2.20.26：工具计数按这一轮重新数
   dshActivityShow('已发送，正在唤醒 Agent…', targetAgent);
   (dshCacheByAgent[targetAgent] = dshCacheByAgent[targetAgent] || []).push({ role: 'user', content: text });  // v2.17：用户消息进缓存（服务端已同步落盘）
   btn.disabled = true; btn.textContent = '回复中…';
@@ -2388,6 +2421,17 @@ async function sendToTerminal() {
             dshActivityShow('正在工作中 · 第 ' + (ev.step || 1) + ' 步…', targetAgent);
           } else if (ph === 'turn_end') {
             dshActivityHide(targetAgent);
+          }
+          continue;
+        }
+        if (t === 'tool_call') {   // v2.20.26：把「它到底在干什么」画出来（工具名 + 命令/文件名）
+          dshToolCount++;
+          dshActivityPush(dshToolLabel(ev) + '（本轮第 ' + dshToolCount + ' 次工具）', targetAgent);
+          continue;
+        }
+        if (t === 'tool_result') {  // v2.20.26：工具失败也要看得见（以前只有转圈）
+          if (ev.status === 'error') {
+            dshActivityPush('⚠️ 工具失败：' + String(ev.result == null ? '' : ev.result).replace(/\s+/g, ' ').slice(0, 80), targetAgent);
           }
           continue;
         }
