@@ -127,10 +127,17 @@ def main():
         ok("活动行助手也带成员守卫",
            "function dshActivityShow(text, agentId)" in html
            and "if (agentId && agentId !== currentDshAgent) return;" in html)
-        ok("请求带 AbortController 信号", "signal: dshChatCtrl.signal" in html)
-        ok("切卡片/关卡片会断开流",
-           "function dshAbortStream()" in html and "dshAbortStream();   // v2.20.23：换卡片就断掉" in html
-           and "function closePerson() { dshAbortStream();" in html)
+        ok("每轮用独立 AbortController（按成员持有）",
+           "const dshStreams = {}" in html and "signal: run.ctrl.signal" in html)
+        # v2.20.29：切卡片不再断流——断了以后服务端还在跑、final 也照常落盘，
+        # 但界面这条流已经没了，于是「回复不跳出来，关掉重开才看见结论」。
+        # 隔离改由「画的时候按 agent 守卫」保证（见下面 dshBubbleFor 与各 append 守卫）。
+        ok("切卡片/关卡片不再断流，只在页面卸载时断",
+           "function closePerson() { document.getElementById('personModal').classList.remove('show'); }" in html
+           and "window.addEventListener('pagehide', dshAbortAllStreams)" in html)
+        ok("同一成员单飞（回车不会掐掉上一轮）", "if (dshStreams[targetAgent]) {" in html)
+        ok("回复气泡也按成员守卫（不会画到别人卡上）",
+           "if (!run || run.agent !== currentDshAgent) return null;" in html)
         ok("AbortError 不当故障显示", "if (e && e.name === 'AbortError') return;" in html)
         ok("回复只进自己那份缓存",
            "(dshCacheByAgent[targetAgent] = dshCacheByAgent[targetAgent] || []).push({ role: 'assistant'" in html)

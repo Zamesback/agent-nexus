@@ -2303,8 +2303,10 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
                     box["text"] = ev["text"]
                     if t == "final" and not box["persisted"]:
                         box["persisted"] = True
+                        # v2.20.29：带上 auto_wake——前端据此把它标成「看板唤醒」而不是「你」说的话
                         _dsh_append_history(project, agent_id, [{
                             "role": "assistant", "content": ev["text"],
+                            "auto_wake": True,
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                         }])
 
@@ -2330,8 +2332,10 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
                 member_cfg["last_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 _dsh_save_member_cfg(project, agent_id, member_cfg)
             if box["text"] and not box["persisted"]:
+                # v2.20.29：同样带 auto_wake 标记（这条路径是「final 没来但有过流式文本」的兜底）
                 _dsh_append_history(project, agent_id, [{
                     "role": "assistant", "content": box["text"],
+                    "auto_wake": True,
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 }])
             if box["text"]:

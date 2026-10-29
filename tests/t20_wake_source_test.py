@@ -130,7 +130,8 @@ ck("有 dshActivityPush()", "function dshActivityPush(text, agentId) {" in HTML)
 ck("活动行支持多行日志（log 数组）", "dshAct.log = (dshAct.log || []).slice(-3);" in HTML)
 ck("SSE 分支处理 tool_call", "if (t === 'tool_call') {" in HTML)
 ck("SSE 分支处理 tool_result 失败", "if (t === 'tool_result') {" in HTML and "工具失败：" in HTML)
-ck("每轮重置工具计数", "dshToolCount = 0;" in HTML)
+ck("工具计数按这一轮重置（挂在 run 上，不再全局）",
+   "toolCount: 0" in HTML and "run.toolCount++" in HTML and "run.toolCount + ' 次工具" in HTML)
 ck("bash 工具显示命令头", "if (name === 'bash') detail = one(inp.command);" in HTML)
 ck("edit/write/read 显示文件名",
    "['edit', 'write', 'read', 'present'].includes(name)" in HTML)
@@ -220,7 +221,7 @@ def _pick(pattern):
 
 pieces = [
     _pick(r"let dshAct = \{.*?\};"),
-    _pick(r"let dshToolCount = 0;"),
+    _pick(r"function dshActEnsure\(agentId, t0\) \{.*?\n\}"),
     _pick(r"const DSH_TOOL_ICON = \{.*?\};"),
     _pick(r"function dshToolLabel\(ev\) \{.*?\n\}"),
     _pick(r"function dshFmtDur\(sec\) \{.*?\n\}"),

@@ -1,3 +1,50 @@
+## v2.20.29 — Two members that never shared memory, and a reply that never reached the screen
+
+Zames reported two things: "when I talk to DSH2, then switch to DSH1's card, DSH1 sometimes answers
+what I was talking to DSH2 about — are they crossing streams?" and "I send an instruction, stay in the
+chat box, it says working for a long time, and when it finishes the answer doesn't appear; if I close
+the card and open it again I get the conclusion."
+
+**They never shared memory.** All three hosted members have their own session id
+(`1e368d90…/18ce2b38…/975e0ec4…`), no run in the log ever used another member's session, and the three
+history files are distinct in subject (DSH2: hit-feel/blood bars, 玩法策划负责: AOE lists,
+设计总负责DSH-1: card art). What made it *look* like crossing is the wake channel:
+
+**1. Automatic wake prompts were rendered as if you had typed them.** When a board @-mention wakes a
+member, `_dsh_auto_wake_worker` writes the prompt into that member's own chat history as `role: user`
+(DSH2 10, 玩法策划负责 24, 设计总负责DSH-1 14 entries), and the prompt quotes the *other* member's board
+message. `dshMsgHtml` only looked at `role === 'user'`, so it labelled every one of them **"你"** — open
+DSH1's card and you read "you" talking about DSH2's topic. The member's reply is appended with no flag
+at all, so it looked like a normal answer to that phantom message. Wake prompts now render as
+`🔔 看板唤醒（不是你说的）`, collapsed by default (they can be 1,500 characters), and wake replies as
+`🔔 唤醒回复`; `server.py` now also stamps new wake replies with `auto_wake: true`.
+
+**2. The live reply was thrown away by the fetch abort, while the run kept going.** `openPerson()` and
+`closePerson()` called `dshAbortStream()`, and Enter bypassed the disabled send button, so a second
+Enter mid-run aborted the first stream. The server does not care: the pipe broke
+(`SSE 写入失败 … 事件=text [Errno 32] Broken pipe`, 20:06:07), the turn kept running (budget nudges
+delivered at 20:08:48 and 20:13:31), `final` was persisted as usual — so the conclusion existed on disk
+and only the screen had lost it. That is precisely "close it and reopen and the answer is there".
+
+Streams are now held per member in `dshStreams` and are aborted only on `pagehide` / `beforeunload`;
+painting stays guarded by agent id, so nothing lands on another member's card. A member runs one turn at
+a time and a repeated Enter is ignored with a note instead of killing the running stream. Each run keeps
+its own bubble reference (`dshBubbleFor`) instead of overwriting "the last element" — which, after the
+card was rebuilt, was your own message. `final` now creates the bubble when there is none (it used to
+be silently dropped, leaving the server-persisted answer invisible). If a turn ends and nothing was
+painted at all, the card re-fetches the server history and repaints itself. Since the stream survives a
+card switch, an approval raised while you are looking at another member is queued per member and drawn
+when you open that card — with the chime and desktop notification firing immediately.
+
+Tests: `tests/t22_wake_and_stream_test.js` 36/36 (real functions extracted from the page: normal user
+vs normal assistant vs wake prompt vs wake reply; structural contracts for no-abort-on-switch,
+single-flight, bubble fallback, self-heal, approval queue, and the server-side `auto_wake` stamping) and
+both regressions were verified red against the old behaviour before going green. `t17` moved from
+"switching aborts the stream" to "switching keeps the stream, painting is guarded per agent" (35/35) and
+`t20` from a global tool counter to the per-run one (61/61). Full regression green: 19 files, 796
+assertions — T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49, T12 30, T13 37, T14 114, T15 64, T16 40,
+T17 35, T18 41, T19 25, T20 61, T21 55 + 17, T22 36.
+
 ## v2.20.28 — A reminder that arrived could still kill the turn it was meant to save
 
 v2.20.27's turn-budget nudge did the hard part correctly: it reached a running turn at a step boundary
