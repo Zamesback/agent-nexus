@@ -1,3 +1,28 @@
+## v2.20.28 — A reminder that arrived could still kill the turn it was meant to save
+
+v2.20.27's turn-budget nudge did the hard part correctly: it reached a running turn at a step boundary
+and the member reported back. Then the session was destroyed. The message handed to `agent.steer()`
+carried `source: { kind: 'plugin' }`, and dsh's v4 session format refuses that at persistence time —
+`packages/session/session-format-v3-to-v4/src/message-sources.ts:9-10` throws `format v4 message
+requires a producer-owned source kind` when `source.kind` is missing, empty, or exactly `'plugin'`. The
+nudge was accepted in memory, the next durable write threw, and the turn died instead of finishing.
+
+The rule asks the producer to name itself, and dsh's own v3→v4 migration already says how: its
+`rewritePluginSource` rewrites `{ kind: 'plugin', plugin: 'external' }` into
+`{ kind: 'plugin:external' }`. The bridge now emits `{ kind: 'plugin:agentnexus-approval-bridge' }` on
+both paths — `createUserMessage` from `@deepseek-ai/dsh-llm` (which spreads the caller's input and only
+supplies `role`/`id`, so `source` passes through untouched) and the local fallback. Delivering a message
+that cannot be persisted is worse than not delivering it: it destroys exactly the work the nudge was
+trying to rescue.
+
+`tests/t21_nudge_bridge_test.js` grows to 17/17 with two assertions on the delivered message's
+`source.kind` — it must be a non-empty string, must not be the retired bare `'plugin'`, and must be
+`plugin:agentnexus-approval-bridge`. Verified red against the old shape (15 passed, 2 failed) before
+going green: the previous 15 checks covered only `role`/`content`/`id`, which is why a message that
+crashed a live turn still passed. Full regression re-run green, 758 assertions: T5 27, T6 12, T7 22,
+T8 13, T9 36, T10 82, T11 49, T12 30, T13 37, T14 114, T15 64, T16 40, T17 33, T18 41, T19 25, T20 61,
+T21 55 + 17.
+
 ## v2.20.27 — A long turn now reports before it runs away
 
 Zames, after the v2.20.26 numbers: "好的，按照你的建议来吧。" — the answer to *"is the extra work

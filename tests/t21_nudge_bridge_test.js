@@ -73,6 +73,14 @@ async function main() {
   ok(Array.isArray(msg.content) && msg.content[0] && msg.content[0].type === 'text'
     && /先回报一句/.test(msg.content[0].text), '消息 content 是 text block 且带原文', JSON.stringify(msg.content))
   ok(typeof msg.id === 'string' && msg.id.length > 0, '消息带 id', String(msg.id))
+  // v2.20.28：v4 会话格式只认「生产者自有」的 source.kind（裸 'plugin' 会被 dsh 在会话
+  // 落盘时拒收：packages/session/session-format-v3-to-v4/src/message-sources.ts:9-10）。
+  // 之前这里只查 role/content/id，于是一个「投递成功但整轮被写崩」的形状照样 15/15 全绿。
+  const src = msg.source || {}
+  ok(typeof src.kind === 'string' && src.kind.length > 0 && src.kind !== 'plugin',
+    "source.kind 是非空字符串且不是裸 'plugin'", JSON.stringify(src))
+  ok(src.kind === 'plugin:agentnexus-approval-bridge',
+    'source.kind 为 plugin:agentnexus-approval-bridge（约定 plugin:<插件名>）', String(src.kind))
   const del = ofType('agentnexus_nudge_delivered')
   ok(del.length === 1 && del[0].level === 1 && del[0].agentId === 'agent-1',
     '回报 agentnexus_nudge_delivered{level:1,agentId:agent-1}', JSON.stringify(del[0]))

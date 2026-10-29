@@ -83,7 +83,14 @@ function rememberAgent(agent) {
 }
 
 function makeUserMessage(text) {
-  const source = { kind: 'plugin', plugin: 'agentnexus-approval-bridge' }
+  // v4 会话格式拒收裸 `kind: 'plugin'`（dsh 的
+  // packages/session/session-format-v3-to-v4/src/message-sources.ts:9-10 会抛
+  // "format v4 message requires a producer-owned source kind"）：source.kind 必须是
+  // 非空字符串且不等于 'plugin'。约定形状就是 `plugin:<插件名>` —— 同一个包的 v3→v4
+  // 迁移（rewritePluginSource）正是把 {kind:'plugin',plugin:'x'} 改写成 {kind:'plugin:x'}。
+  // 写成裸 'plugin' 的后果是：提醒投递成功，但下一次会话落盘抛错、整轮被写崩
+  // （v2.20.27 真实事故，见 CHANGELOG v2.20.28）。
+  const source = { kind: 'plugin:agentnexus-approval-bridge' }
   try {
     // 插件不在 dsh 安装目录里，require 不可能按祖先目录找到 dsh-llm；
     // 以启动器（process.argv[1]）为基准解析才有机会成功。
