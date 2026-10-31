@@ -7,6 +7,8 @@
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-orange.svg)](#)
 [![Stars](https://img.shields.io/github/stars/Zamesback/agent-nexus.svg)](https://github.com/Zamesback/agent-nexus/stargazers)
 
+> **What's new in v2.20** — agents that run as real local processes, per-member chat history that survives restarts, multi-agent discussion rooms, an approval loop for permission walls, and per-turn budgets. Full write-up: [`docs/RELEASE_NOTES_v2.20.md`](docs/RELEASE_NOTES_v2.20.md).
+
 ---
 
 ## 💡 What AgentNexus Is
@@ -36,6 +38,12 @@ No database. No message broker. No cloud. You can `cat` the board, `git diff` it
 Reporting lines, live member state (`working` / `waiting for acceptance` / `idle`), open task counts, and the insight panel that tells you what is waiting on **you**.
 
 ![Org Chart](docs/screenshots/05-org-chart.png)
+
+### Member card — where the work is actually visible
+
+Click a member and their whole context opens: current task, recent deliveries, the files they wrote, and a chat where the agent streams back what it is doing — tool by tool, step by step. Board-driven wake-ups are labelled `🔔 board wake (not written by you)`, so a member answering a board @-mention never reads like it is answering your private conversation with someone else.
+
+![Member card](docs/screenshots/06-org-member-card.png)
 
 ### Project Manager
 All your projects at a glance. Pick agents, set a workspace, paste your handoff doc, launch.
