@@ -4937,6 +4937,25 @@ class CollabHandler(SimpleHTTPRequestHandler):
         """简化日志"""
         print(f"[{time.strftime('%H:%M:%S')}] {args[0]}")
 
+    def end_headers(self):
+        """v2.20.30：HTML 一律不许缓存。
+
+        起因（用户报障）：改完的修复「看起来没生效」——那个标签页从两天前就一直开着，
+        跑的是内存里的旧 JS。而且 SimpleHTTPRequestHandler 不发 Cache-Control，浏览器会按
+        「启发式缓存」自己猜新鲜度（文件越旧猜得越长），普通刷新都可能拿到旧副本。
+        页面本身也有版本号 + 更新提示（org_chart.html 的 showBuildTag/checkPageFreshness），
+        这里把服务端这条路也堵死：no-store 让每次刷新都真的取新文件。
+        """
+        try:
+            path = urlparse(getattr(self, "path", "") or "").path or "/"
+            if path == "/" or path.endswith((".html", ".htm")):
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+        except Exception:
+            pass
+        super().end_headers()
+
     def _get_project(self):
         """从查询参数获取项目名"""
         parsed = urlparse(self.path)

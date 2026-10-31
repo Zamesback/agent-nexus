@@ -89,6 +89,16 @@
     font-family: var(--mono); font-size: 13px; font-weight: 700;
     color: var(--accent); letter-spacing: 0.5px;
   }
+  /* v2.20.30：版本号 + 「页面已更新」提示。
+     本地工具常年开着，改了 HTML 不重载就还在跑旧 JS，用户会以为修复没生效——
+     这个标签让「我现在跑的是哪个版本」一眼可见。 */
+  .build-tag { font-family: var(--mono); font-size: 10px; color: var(--dim-2); margin-left: 6px; user-select: text; }
+  #reloadBanner {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 99999;
+    background: #9a6700; color: #fff; font-size: 12px; padding: 8px 14px; border-radius: 8px;
+    cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,.45); font-family: var(--mono);
+  }
+  #reloadBanner:hover { background: #b8860b; }
   .proj-name { font-size: 17px; font-weight: 600; white-space: nowrap; }
   .subtitle {
     font-size: 12px; color: var(--dim); font-family: var(--mono);
@@ -2161,6 +2171,18 @@ function dshBubbleFor(run) {
   run.bubbleEl = box.lastElementChild;
   return run.bubbleEl;
 }
+// v2.20.30：回复变长时，只有你本来就在底部附近才跟随滚动——翻历史时不被拽走。
+// 以前 dshSetBody 只换正文不滚动，一条很长的结论长出来以后，视线还停在上面那行「工作中」。
+function dshPaintReply(run, text) {
+  const box = document.getElementById('dshMsgs');
+  if (!box) return false;
+  const follow = (box.scrollHeight - box.scrollTop - box.clientHeight) < 140;
+  const b = dshBubbleFor(run);
+  if (!b) return false;
+  dshSetBody(b, 'assistant', text);
+  if (follow) box.scrollTop = box.scrollHeight;
+  return true;
+}
 // 切回一张还在跑的卡片：把已经收到的半截回复和「还在跑」重新画上去
 function dshReattach(who) {
   const run = dshStreams[who];
@@ -2595,8 +2617,8 @@ async function sendToTerminal() {
         if (t === 'text') {
           dshActivityHide(targetAgent);
           run.replyContent = ev.text || '';
-          const b = dshBubbleFor(run);       // 没有气泡就补一个（不再依赖「最后一个元素」）
-          if (b) { dshSetBody(b, 'assistant', run.replyContent); run.gotReply = true; }
+          // 没有气泡就补一个（不再依赖「最后一个元素」）；变长时按需跟随滚动
+          if (dshPaintReply(run, run.replyContent)) run.gotReply = true;
           continue;
         }
         if (t === 'final') {
@@ -2604,8 +2626,7 @@ async function sendToTerminal() {
           // 于是服务端已经落盘、界面却一个字都没有，只能关掉重开才看到。现在缺就补。
           if (ev.text) {
             run.replyContent = ev.text;
-            const b = dshBubbleFor(run);
-            if (b) { dshSetBody(b, 'assistant', run.replyContent); run.gotReply = true; }
+            if (dshPaintReply(run, run.replyContent)) run.gotReply = true;
           }
           continue;
         }
@@ -3197,10 +3218,50 @@ document.getElementById('btn-board').onclick = openBoard;
 document.getElementById('btn-position').onclick = openPos;
 document.getElementById('btn-edit').onclick = toggleEdit;
 
+/* ===== v2.20.30：这个标签页到底跑的是哪个版本？ =====
+   起因（用户报障）：改完的修复「看起来没生效」——其实是那个标签页从两天前就一直开着，
+   跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
+   浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
+   现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
+const BUILD_VERSION = 'v2.20.30';
+let dshPageStamp = '';
+function showBuildTag() {
+  try {
+    const mark = document.querySelector('.logo-mark');
+    if (!mark || document.getElementById('buildTag')) return;
+    const tag = document.createElement('span');
+    tag.id = 'buildTag';
+    tag.className = 'build-tag';
+    tag.textContent = BUILD_VERSION;
+    tag.title = '当前页面代码版本。若比 CHANGELOG 里最新的版本旧，说明这个标签页还在跑旧代码，刷新一下。';
+    mark.insertAdjacentElement('afterend', tag);
+  } catch (e) {}
+}
+function showReloadBanner() {
+  if (document.getElementById('reloadBanner')) return;
+  const b = document.createElement('div');
+  b.id = 'reloadBanner';
+  b.textContent = '⚠️ 页面代码已更新 —— 点这里刷新（不刷新会继续跑旧逻辑）';
+  b.onclick = function () { location.reload(); };
+  document.body.appendChild(b);
+}
+async function checkPageFreshness() {
+  try {
+    const r = await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' });
+    const lm = r.headers.get('Last-Modified') || '';
+    if (!lm) return;
+    if (!dshPageStamp) { dshPageStamp = lm; return; }
+    if (lm !== dshPageStamp) showReloadBanner();
+  } catch (e) {}
+}
+
 (async function main() {
   try {
     await loadBoard();
     loadProjects();
+    showBuildTag();
+    checkPageFreshness();
+    setInterval(checkPageFreshness, 60000);
     // 自动刷新：30s 轮询（同看板节奏）
     setInterval(async () => { try { await loadBoard(); } catch (e) {} }, 30000);
   } catch (e) {

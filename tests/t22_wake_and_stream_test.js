@@ -72,7 +72,7 @@ include(sendSrc || '', 'if (dshStreams[targetAgent])', '发送前先看这个成
 include(sendSrc || '', 'dshActivityPush(\'这一轮还在跑', '重复发送被忽略且说明原因')
 
 console.log('\n== D. final 缺气泡要补、收尾要自愈（②）==')
-include(sendSrc || '', 'const b = dshBubbleFor(run)', 'final/text 走 dshBubbleFor（缺就补）')
+include(sendSrc || '', 'dshPaintReply(run, run.replyContent)', 'final/text 走 dshPaintReply（缺气泡就补）')
 include(bubbleSrc || '', 'box.contains(run.bubbleEl)', '气泡被重建过才重插')
 include(sendSrc || '', 'if (!run.gotReply && ev.ok) syncDshHistoryFromServer', '这轮没画出来 → 取服务端历史自愈')
 include(html, 'async function syncDshHistoryFromServer', '有自愈函数')
@@ -122,6 +122,17 @@ const chatStart = server.indexOf('def _handle_dsh_chat(')
 const chatEnd = server.indexOf('def _handle_dsh_model(', chatStart)
 const chatSrc = chatStart > 0 && chatEnd > chatStart ? server.slice(chatStart, chatEnd) : ''
 ok(chatSrc.indexOf('auto_wake') < 0, '用户对话落盘不带 auto_wake（不能误标）')
+
+section('\n== H. 版本可见 + 更新提示 + 回复跟随滚动（v2.20.30）==')
+include(html, "const BUILD_VERSION = 'v2.20.30'", '页面里有版本号常量')
+include(html, 'function showBuildTag()', '顶栏会显示版本号')
+include(html, 'function showReloadBanner()', '有「页面已更新，点这里刷新」的提示')
+include(html, 'async function checkPageFreshness()', '会对比本文件的 Last-Modified')
+include(html, 'setInterval(checkPageFreshness, 60000)', '每分钟检查一次')
+include(html, 'function dshPaintReply(run, text)', 'reply 绘制统一入口')
+include(html, 'if (follow) box.scrollTop = box.scrollHeight;', '在底部附近才跟随滚动（翻历史不被拽走）')
+include(server, '"Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"', '服务端 HTML 不缓存')
+include(server, 'def end_headers(self):', '用 end_headers 统一给 HTML 加 no-store')
 
 console.log(out.join('\n'))
 console.log('\n' + pass + ' passed, ' + fail + ' failed')

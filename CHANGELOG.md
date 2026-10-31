@@ -1,3 +1,39 @@
+## v2.20.30 — The fix was live; the tab was two days old
+
+Zames came back after v2.20.29: "the second problem is still there — I talk, it shows thinking, I wait a
+long time, no conclusion; I close the card and reopen it and the long conclusion appears."
+
+The fix was on disk. The tab was not running it. Two independent proofs:
+
+`org_chart.html` was written at 21:50 on 10-29 and the runs in question happened at 09:57 on 10-31, so
+the server had been serving the new file for a day and a half. But the log shows the smoking gun of the
+*old* client: a second `dsh/chat` arrived **two seconds into a run that was still going**
+(`message=还在干嘛` at 09:57:03, `message=进展如何` at 09:57:05), and twenty seconds later the first
+stream broke (`SSE 写入失败 … 事件=tool_call [Errno 32] Broken pipe` at 09:57:24) while the run itself
+kept going to `final` at 09:58:59. Accepting a second message mid-run and aborting the first stream is
+exactly what v2.20.29 removed; a page running it would have answered "这一轮还在跑" and sent nothing.
+So that tab had been open since before 10-29 21:50 and was executing the JS it loaded back then — and
+the reply it "never got" was sitting in the history file the whole time.
+
+Worse, a plain refresh was not guaranteed to help: `SimpleHTTPRequestHandler` sends no `Cache-Control`,
+so browsers apply heuristic freshness — a file last modified a day earlier can be considered fresh for
+hours, and a reload can quietly reuse the stale copy.
+
+Three changes so this cannot masquerade as a bug again. `server.py` now sends
+`Cache-Control: no-store, no-cache, must-revalidate, max-age=0` (plus `Pragma`/`Expires`) on every HTML
+response via a `CollabHandler.end_headers()` override, so a reload always refetches. The page shows its
+own build in the header (`v2.20.30`, title explains what a mismatch means) and, once a minute, HEADs
+itself and compares `Last-Modified`; if the file changed under it, a banner appears: "页面代码已更新 —
+点这里刷新". And because "a long conclusion that grows below the fold while you stare at the activity
+line" is its own way to look like nothing arrived, reply painting now goes through `dshPaintReply()`,
+which follows the scroll only when you were already near the bottom (within 140px) — reading history is
+not interrupted.
+
+Tests: `t22` 45/45 (nine new checks: build constant, tag, banner, freshness check and its interval,
+`dshPaintReply` as the single paint path, follow-only-near-bottom, and the server's no-store override).
+Full regression green: 19 files, 805 assertions — T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49,
+T12 30, T13 37, T14 114, T15 64, T16 40, T17 35, T18 41, T19 25, T20 61, T21 55 + 17, T22 45.
+
 ## v2.20.29 — Two members that never shared memory, and a reply that never reached the screen
 
 Zames reported two things: "when I talk to DSH2, then switch to DSH1's card, DSH1 sometimes answers
