@@ -88,7 +88,7 @@ console.log('\n== F. 自动唤醒不再渲染成「你」（①）==')
 include(html, 'meta.auto_wake', 'dshMsgHtml 认识 auto_wake')
 include(html, '🔔 看板唤醒（不是你说的）', '唤醒提示词有独立标签')
 include(html, '🔔 唤醒回复', '唤醒回复有独立标签')
-include(html, "h.map(m => dshMsgHtml(m.role, m.content, null, m))", '历史渲染把整条记录（含 auto_wake）传下去')
+include(html, "Object.assign({ agent: who }, m)", '历史渲染把整条记录（含 auto_wake / attachments）传下去')
 
 // 用真实函数跑：普通消息 vs 唤醒记录
 const code = [
@@ -96,8 +96,9 @@ const code = [
   extractFn(html, 'dshBody'),
   extractFn(html, 'dshMsgHtml')
 ].join('\n')
-const api = new Function('renderMiniMarkdown', code + '\nreturn { dshMsgHtml: dshMsgHtml };')(
-  function (text) { return '<div class="md">' + String(text) + '</div>' }
+const api = new Function('renderMiniMarkdown', 'dshAttachHtml', code + '\nreturn { dshMsgHtml: dshMsgHtml };')(
+  function (text) { return '<div class="md">' + String(text) + '</div>' },
+  function () { return '' }   // v2.20.31：附件在 T23 里单独测，这里只需要不崩
 )
 const normalUser = api.dshMsgHtml('user', '你好')
 const normalAsst = api.dshMsgHtml('assistant', '收到')
@@ -124,7 +125,7 @@ const chatSrc = chatStart > 0 && chatEnd > chatStart ? server.slice(chatStart, c
 ok(chatSrc.indexOf('auto_wake') < 0, '用户对话落盘不带 auto_wake（不能误标）')
 
 section('\n== H. 版本可见 + 更新提示 + 回复跟随滚动（v2.20.30）==')
-include(html, "const BUILD_VERSION = 'v2.20.30'", '页面里有版本号常量')
+ok(/const BUILD_VERSION = 'v2\.\d+\.\d+'/.test(html), '页面里有版本号常量')
 include(html, 'function showBuildTag()', '顶栏会显示版本号')
 include(html, 'function showReloadBanner()', '有「页面已更新，点这里刷新」的提示')
 include(html, 'async function checkPageFreshness()', '会对比本文件的 Last-Modified')

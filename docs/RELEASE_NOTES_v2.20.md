@@ -2,7 +2,7 @@
 
 > The v2.20 arc is **process hosting**: an agent stops being a prompt you paste and becomes a real
 > local process that the board can wake, watch, and ask *you* for permission before it touches
-> anything. This is the write-up of what landed between v2.20.6 and v2.20.30.
+> anything. This is the write-up of what landed between v2.20.6 and v2.20.31.
 
 ![Org chart](screenshots/05-org-chart.png)
 
@@ -129,6 +129,17 @@ banner when the file changed underneath it, and HTML responses are served with
 `Cache-Control: no-store` so a reload can never reuse a stale copy.
 
 ---
+
+## 11. Attachments, both directions
+
+**Into the chat.** Drop or paste an image or file onto a member's card. It is stored in the member's own
+working directory (`_inbox/`, 15 MB cap, name sanitised) and the message carries the path, so the agent
+opens it with `read_image` (vision models) or `read`. Pending attachments appear as removable chips above
+the input, and an attachment-only message is allowed.
+
+**Back out of the reply.** Everything the turn actually wrote — the artifact registry already records
+`write` / `edit` / `present` with timestamps — is attached to that reply as thumbnails or file chips that
+open the existing preview. The window is the turn itself: earlier files are not re-attached.
 
 ## Running it
 

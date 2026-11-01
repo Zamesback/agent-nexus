@@ -598,6 +598,24 @@
   .dsh-msg .md th { background: var(--panel); font-weight: 600; }
   .dsh-msg.md-wide { max-width: 100%; }
   .dsh-usage { font-size: 10px; font-family: var(--mono); color: var(--dim-2); padding: 4px 0 0 2px; }
+  /* v2.20.31：回复下面的附件（图片缩略图 / 文件条），以及输入区待发送的附件 */
+  .dsh-att-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .dsh-att { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 8px;
+             border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.03);
+             font-size: 11px; color: var(--dim-1); cursor: pointer; text-decoration: none; }
+  .dsh-att:hover { border-color: var(--accent); color: var(--text); }
+  .dsh-att.img { flex-direction: column; align-items: flex-start; padding: 4px; }
+  .dsh-att img { max-width: 220px; max-height: 160px; border-radius: 6px; display: block; }
+  .dsh-att .att-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dsh-att .att-size { color: var(--dim-2); font-family: var(--mono); }
+  .dsh-att-bar { display: none; flex-wrap: wrap; gap: 6px; padding: 6px 2px 0; }
+  .dsh-att-bar.has { display: flex; }
+  .dsh-att-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 6px;
+                  border: 1px dashed var(--line); font-size: 11px; color: var(--dim-1); }
+  .dsh-att-chip img { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; display: block; }
+  .dsh-att-chip .x { cursor: pointer; color: var(--dim-2); font-weight: 700; }
+  .dsh-att-chip .x:hover { color: #f85149; }
+  .person-right.dragover { outline: 2px dashed var(--accent); outline-offset: -6px; }
   .dsh-input-row { display: flex; gap: 8px; margin-top: 8px; }
   .dsh-input-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 9px 12px; font-size: 13px; outline: none; }
   .dsh-input-row input:focus { border-color: var(--line-2); }
@@ -1631,6 +1649,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
         </div>
         <div class="dsh-approval-list" id="dshApprovalList"></div>
         <div class="dsh-msgs" id="dshMsgs">${renderDshHistory()}</div>
+        <div class="dsh-att-bar" id="dshAttBar"></div>
         <div class="dsh-input-row">
           <input id="dshInput" placeholder="直接给终端 Agent 发指令（实时回复）…" onkeydown="if(event.key==='Enter'&&!event.isComposing)sendToTerminal()">
           <button class="btn mini" id="dshMicBtn" onclick="toggleDshVoice()" title="语音输入：说话变文字（再点一次停止）">🎤</button>
@@ -1652,6 +1671,8 @@ function openPerson(agentId) {  const a = agentById[agentId];
   scrollToBottom(cl);
   const msel = document.getElementById('dshModelSelect');
   if (msel) loadDshModel(msel);
+  if (isTerminalAgent(a)) initDshDrop();      // v2.20.31：支持把图片/文件拖进聊天框（也支持粘贴）
+  dshClearPendingAtt();                        // 切卡片就清掉上一个成员待发送的附件
   if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史（内部也会滚到底）
   if (isTerminalAgent(a)) loadArtifacts();   // v2.20.6：列出该成员写过的交付物（可就地预览）
   if (isTerminalAgent(a)) loadAutoWake();    // v2.20.7：自动唤醒开关状态
@@ -2212,7 +2233,7 @@ async function syncDshHistoryFromServer(agentId) {
     const box = document.getElementById('dshMsgs');
     if (!box) return;
     const h = dshCacheByAgent[who].slice(-30);
-    box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content, null, m)).join('') : '';
+    box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content, null, Object.assign({ agent: who }, m))).join('') : '';
     scrollToBottom(box);
   } catch (e) { /* 自愈失败不影响主流程 */ }
 }
@@ -2254,7 +2275,7 @@ async function loadDshHistory() {
       wdEl.title = wd ? '工作目录（也是它的沙箱可写根）：' + wd : '';
     }
     const h = dshCacheByAgent[who].slice(-30);
-    box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content, null, m)).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
+    box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content, null, Object.assign({ agent: who }, m))).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
     scrollToBottom(box);  // v2.20.4：打开卡片时滚动到最近消息
     // v2.20.29：这个成员此刻还有一轮在跑 → 把半截回复和「还在跑」接回来（历史里还没有那条）
     dshReattach(who);
@@ -2277,6 +2298,35 @@ function dshBody(role, content) {
   const html = renderMiniMarkdown(text);
   return { html: '<div class="md">' + html + '</div>', wide: /<table/.test(html) };
 }
+/* ===== v2.20.31：附件 =====
+   两种方向：① 拖进来给 Agent 看（落盘到它的工作目录，消息里带路径，它用 read_image/read 自己看）；
+   ② Agent 这一轮写出来的图/文件，直接挂在回复气泡下面——像别的 agent 一样「文字 + 附件」。 */
+const DSH_ATT_IMG = { png: 1, jpg: 1, jpeg: 1, gif: 1, webp: 1, bmp: 1, svg: 1, avif: 1 };
+function dshAttExt(p) { return String(p || '').split('?')[0].split('.').pop().toLowerCase(); }
+function dshAttUrl(agentId, p, download) {
+  return '/api/dsh/artifact?project=' + encodeURIComponent(PROJECT || '') +
+         '&agent=' + encodeURIComponent(agentId || '') + '&path=' + encodeURIComponent(p || '') +
+         (download ? '&download=1' : '');
+}
+function dshAttachHtml(items, agentId) {
+  const list = (items || []).filter(function (x) { return x && x.path; });
+  if (!list.length) return '';
+  const parts = list.map(function (a) {
+    const name = String(a.path).split('/').pop();
+    const ext = dshAttExt(a.path);
+    const url = dshAttUrl(agentId, a.path, false);
+    const nm = esc2(name);
+    if (DSH_ATT_IMG[ext]) {
+      return '<a class="dsh-att img" href="' + url + '" target="_blank" rel="noopener" title="' + nm + '">' +
+             '<img src="' + url + '" alt="' + nm + '" loading="lazy">' +
+             '<span class="att-name">' + nm + '</span></a>';
+    }
+    return '<a class="dsh-att" href="' + url + '" target="_blank" rel="noopener" title="' + nm + '">' +
+           '📄 <span class="att-name">' + nm + '</span>' +
+           '<span class="att-size">' + fmtBytes(a.size) + '</span></a>';
+  });
+  return '<div class="dsh-att-wrap">' + parts.join('') + '</div>';
+}
 function dshMsgHtml(role, content, whoOverride, meta) {
   // v2.20.29：看板自动唤醒的提示词被写进了成员历史（role=user），以前一律渲染成「你」——
   // 于是打开 B 的卡片会看到「你」在讲 A 的事，看起来就是两个成员串话。现在单独标出来：
@@ -2288,13 +2338,15 @@ function dshMsgHtml(role, content, whoOverride, meta) {
         esc2(String(content == null ? '' : content)) + '</div></details></div>';
     }
     const wb = dshBody(role, content);
+    const watt = dshAttachHtml(meta.attachments, meta.agent);
     return '<div class="dsh-msg wake assistant' + (wb.wide ? ' md-wide' : '') + '">' +
-      '<span class="who">🔔 唤醒回复</span>' + wb.html + '</div>';
+      '<span class="who">🔔 唤醒回复</span>' + wb.html + watt + '</div>';
   }
   const cls = role === 'user' ? 'user' : (role === 'thinking' ? 'thinking' : 'assistant');
   const who = whoOverride || (role === 'user' ? '你' : '终端 Agent');
   const b = dshBody(role, content);
-  return '<div class="dsh-msg ' + cls + (b.wide ? ' md-wide' : '') + '"><span class="who">' + who + '</span>' + b.html + '</div>';
+  const att = (meta && meta.attachments) ? dshAttachHtml(meta.attachments, meta.agent) : '';
+  return '<div class="dsh-msg ' + cls + (b.wide ? ' md-wide' : '') + '"><span class="who">' + who + '</span>' + b.html + att + '</div>';
 }
 // 流式更新：气泡已经在页面上，只换正文并同步「含表格放宽」这个状态
 function dshSetBody(el, role, content) {
@@ -2307,7 +2359,7 @@ function renderDshHistory() {
   // v2.17：打开卡片时由 loadDshHistory() 从服务端加载；此函数仅用于同步兜底
   const h = dshHistory().slice(-30);
   if (!h.length) return '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
-  return h.map(m => dshMsgHtml(m.role, m.content, null, m)).join('');
+  const who = currentDshAgent; return h.map(m => dshMsgHtml(m.role, m.content, null, Object.assign({ agent: who }, m))).join('');
 }
 async function clearDshHistory() {
   if (!confirm('确定清空该成员的会话？历史记录与 Agent 记忆都会归零。')) return;
@@ -2492,11 +2544,103 @@ async function toggleDshVoice() {
   }
 }
 
+/* ===== v2.20.31：把图片/文件拖进聊天框 =====
+   为什么落盘：dsh 的 headless CLI 只吃一段文本任务，没有附件入口。所以这里先把文件传到
+   成员的工作目录（它一定读得到），再把路径写进消息里——它用 read_image / read 自己看。
+   模型不支持视觉时它会如实说看不到，不会假装看过。 */
+let dshPendingAtt = [];   // [{path,name,size,mime,is_image,blobUrl}]
+function dshRenderPendingAtt() {
+  const bar = document.getElementById('dshAttBar');
+  if (!bar) return;
+  if (!dshPendingAtt.length) { bar.className = 'dsh-att-bar'; bar.innerHTML = ''; return; }
+  bar.className = 'dsh-att-bar has';
+  bar.innerHTML = dshPendingAtt.map(function (a, i) {
+    const thumb = (a.is_image && a.blobUrl) ? '<img src="' + a.blobUrl + '" alt="">' : '📄';
+    return '<span class="dsh-att-chip">' + thumb +
+      '<span class="att-name">' + esc2(a.name) + '</span>' +
+      '<span class="att-size">' + fmtBytes(a.size) + '</span>' +
+      '<span class="x" title="移除" onclick="dshRemovePendingAtt(' + i + ')">×</span></span>';
+  }).join('');
+}
+function dshRemovePendingAtt(i) {
+  const a = dshPendingAtt[i];
+  if (a && a.blobUrl) { try { URL.revokeObjectURL(a.blobUrl); } catch (e) {} }
+  dshPendingAtt.splice(i, 1);
+  dshRenderPendingAtt();
+}
+function dshClearPendingAtt() {
+  dshPendingAtt.forEach(function (a) { if (a.blobUrl) { try { URL.revokeObjectURL(a.blobUrl); } catch (e) {} } });
+  dshPendingAtt = [];
+  dshRenderPendingAtt();
+}
+async function dshUploadFile(file) {
+  if (!file) return;
+  if (file.size > 15 * 1024 * 1024) { alert('文件过大（上限 15 MB）：' + file.name); return; }
+  const who = currentDshAgent;
+  const isImg = (file.type || '').indexOf('image/') === 0;
+  const blobUrl = isImg ? URL.createObjectURL(file) : '';
+  try {
+    const data = await new Promise(function (res, rej) {
+      const fr = new FileReader();
+      fr.onload = function () { res(String(fr.result || '')); };
+      fr.onerror = function () { rej(new Error('读取失败')); };
+      fr.readAsDataURL(file);
+    });
+    const r = await fetch('/api/dsh/upload' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, mime: file.type || '', data: data })
+    });
+    const j = await r.json().catch(function () { return {}; });
+    if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    if (who !== currentDshAgent) { if (blobUrl) URL.revokeObjectURL(blobUrl); return; }  // 中途切了卡片
+    dshPendingAtt.push({ path: j.path, name: j.name, size: j.size, mime: j.mime,
+                         is_image: !!j.is_image, blobUrl: blobUrl });
+    dshRenderPendingAtt();
+  } catch (e) {
+    if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch (_e) {} }
+    alert('附件上传失败：' + e.message);
+  }
+}
+function initDshDrop() {
+  const panel = document.querySelector('#personCard .person-right');
+  const input = document.getElementById('dshInput');
+  if (!panel) return;
+  const take = function (files) {
+    Array.prototype.slice.call(files || []).forEach(function (f) { dshUploadFile(f); });
+  };
+  panel.ondragover = function (e) { e.preventDefault(); panel.classList.add('dragover'); };
+  panel.ondragleave = function (e) { if (e.target === panel) panel.classList.remove('dragover'); };
+  panel.ondrop = function (e) {
+    e.preventDefault();
+    panel.classList.remove('dragover');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) take(e.dataTransfer.files);
+  };
+  if (input) {
+    input.onpaste = function (e) {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      const files = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') { const f = items[i].getAsFile(); if (f) files.push(f); }
+      }
+      if (files.length) { e.preventDefault(); take(files); }
+    };
+  }
+  dshRenderPendingAtt();
+}
+
 async function sendToTerminal() {
   const input = document.getElementById('dshInput');
   const btn = document.getElementById('dshSendBtn');
-  const text = (input.value || '').trim();
-  if (!text) return;
+  const typed = (input.value || '').trim();
+  // v2.20.31：只拖了附件、没写字也能发——路径会写进消息，让它自己去看
+  if (!typed && !dshPendingAtt.length) return;
+  const attLines = dshPendingAtt.length
+    ? dshPendingAtt.map(function (a, i) {
+        return '【附件 ' + (i + 1) + '】' + a.path +
+               (a.is_image ? '（图片，用 read_image 查看）' : '（用 read 查看）');
+      }).join('\n') + '\n\n'
+    : '';
+  const text = attLines + (typed || '（见附件）');
   // v2.20.23：本轮从头到尾只认这个成员——期间用户切了卡片，回复也不许画到别人卡上
   const targetAgent = currentDshAgent || 'terminal';
   const boxFor = () => (targetAgent === currentDshAgent ? document.getElementById('dshMsgs') : null);
@@ -2516,6 +2660,7 @@ async function sendToTerminal() {
   };
   dshStreams[targetAgent] = run;
   dshActEnsure(targetAgent, run.t0);
+  dshClearPendingAtt();   // 附件已经写进消息，清掉输入区的待发条
   dshAppend('user', text, targetAgent);
   dshActivityShow('已发送，正在唤醒 Agent…', targetAgent);
   (dshCacheByAgent[targetAgent] = dshCacheByAgent[targetAgent] || []).push({ role: 'user', content: text });  // v2.17：用户消息进缓存（服务端已同步落盘）
@@ -2643,6 +2788,14 @@ async function sendToTerminal() {
           if (box && run.gotReply) {
             const rb = (run.bubbleEl && box.contains(run.bubbleEl)) ? run.bubbleEl : box.lastElementChild;
             if (rb) rb.insertAdjacentHTML('beforeend', `<div class="dsh-usage">⟐ in ${fmtTokens(usage.inputTokens || 0)} / out ${fmtTokens(usage.outputTokens || 0)} / 累计 ${fmtTokens(total.totalTokens || 0)}</div>`);
+          }
+          // v2.20.31：这一轮真正写出来的图/文件，直接挂在回复气泡下面（像别的 agent 那样）
+          const atts = ev.attachments || [];
+          if (atts.length && run.gotReply) {
+            const boxA = boxFor();
+            const rbA = (run.bubbleEl && boxA && boxA.contains(run.bubbleEl)) ? run.bubbleEl
+                        : (boxA ? boxA.lastElementChild : null);
+            if (rbA) rbA.insertAdjacentHTML('beforeend', dshAttachHtml(atts, targetAgent));
           }
           const usageEl = targetAgent === currentDshAgent ? document.getElementById('dshUsage') : null;
           if (usageEl) {
@@ -3223,7 +3376,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.30';
+const BUILD_VERSION = 'v2.20.31';
 let dshPageStamp = '';
 function showBuildTag() {
   try {

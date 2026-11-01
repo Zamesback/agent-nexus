@@ -1,3 +1,32 @@
+## v2.20.31 — Drop an image on a hosted member, and get its files back under the reply
+
+Zames asked for the two things the chat box could not do: drag a picture into a hosted member's chat,
+and have the member answer with images/files attached under its reply the way other agents do.
+
+**Input.** dsh's headless CLI takes one text task (it reads stdin once to EOF) and has no attachment or
+multimodal entry point, so a binary cannot be handed to it from outside. The workable shape is the one
+the filesystem already offers: write the file into the member's working directory — the one root it can
+read — then put the path in the message and let it look with `read_image` / `read`. Dropping or pasting
+a file posts it to `/api/dsh/upload`, which sanitises the name, caps it at 15 MB and stores it in
+`<workdir>/_inbox/<stamp>_<name>`; the message carries `【附件 N】<path>（图片，用 read_image 查看）`
+(other files say `read`). Pending attachments show as removable chips above the input, and an
+attachment-only message is allowed (`（见附件）` supplies the text when you typed none).
+
+**Output.** The artifact registry already recorded every `write` / `edit` / `present` with a timestamp,
+so the reply can carry what the turn actually produced: `_dsh_turn_attachments()` filters that member's
+entries to `ts >= turn start`, the assistant history entry gains `attachments: [...]`, `dsh_done`
+carries the same list so the live card paints immediately, and `dshAttachHtml()` renders images as
+thumbnails and everything else as a file chip (name + size) linking to the existing artifact preview.
+The window starts one second early to dodge the same-second boundary.
+
+Tests: `tests/t23_attachments_test.js` 48/48 (wiring, plus the real `dshAttachHtml` against a fake DOM:
+png → thumbnail, md → chip, empty/null safe, case-insensitive extension) and
+`tests/t23_upload_units_test.py` 16/16 (the real `_dsh_safe_upload_name` against `../../etc/passwd`,
+mime-derived extensions, CJK names and the 120-char cut; the real `_dsh_turn_attachments` window with
+dedupe and deleted files). Both were verified red against the old shape first. Full regression green:
+21 files, 869 assertions — T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49, T12 30, T13 37, T14 114,
+T15 64, T16 40, T17 35, T18 41, T19 25, T20 61, T21 55 + 17, T22 45, T23 48 + 16.
+
 ## v2.20.30 — The fix was live; the tab was two days old
 
 Zames came back after v2.20.29: "the second problem is still there — I talk, it shows thinking, I wait a

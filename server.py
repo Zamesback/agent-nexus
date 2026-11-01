@@ -3441,6 +3441,135 @@ def _dsh_artifact_list(project, agent_id=None):
     out.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
     return out
 
+DSH_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
+
+def _dsh_inbox_dir(project):
+    """拖进来的图片/附件的落点：<成员工作目录>/_inbox。
+
+    必须落在成员自己的工作目录里——那是它唯一能读能写的地方（v2.20.25），
+    放到别处它自己就看不见自己收到的东西了。
+    """
+    wd = _dsh_run_cwd(project)
+    if not wd:
+        return None
+    d = os.path.join(wd, "_inbox")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        return None
+    return d
+
+
+def _dsh_safe_upload_name(name, mime):
+    """保留可读的文件名，去掉路径与非安全字符；没扩展名时按 mime 补一个。"""
+    base = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    base = re.sub(r"[^\w\u4e00-\u9fff.\-]+", "_", base)
+    base = base.strip("._-") or "upload"
+    if "." not in base:
+        ext = {
+            "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp",
+            "image/svg+xml": "svg", "image/avif": "avif", "application/pdf": "pdf",
+            "text/plain": "txt", "text/markdown": "md", "application/json": "json",
+        }.get(str(mime or "").lower(), "bin")
+        base = base + "." + ext
+    if len(base) > 120:
+        stem, dot, ext = base.rpartition(".")
+        base = (stem[:100] + dot + ext) if dot else base[:120]
+    return base
+
+
+def _handle_dsh_upload(self, project=None):
+    """POST /api/dsh/upload?project=X —— 接收前端拖进来的图片/文件，落到 <工作目录>/_inbox。
+
+    为什么落盘而不是内联进提示词：dsh 的 headless CLI 只吃一段文本任务（stdin 一次读到 EOF），
+    没有附件 / 多模态入口。所以「把图拖给它看」的正确形态是：先写进它的工作目录，再把路径写进
+    消息里，让它用 read_image / read 自己去看（模型需支持视觉；不支持它会如实说看不到）。
+    """
+    import base64 as _b64
+    if not project:
+        self._send_json({"ok": False, "error": "缺少 project"}, status=400)
+        return
+    try:
+        length = int(self.headers.get("Content-Length") or 0)
+        req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    except Exception:
+        self._send_json({"ok": False, "error": "请求体解析失败"}, status=400)
+        return
+    raw = str(req.get("data") or "")
+    if not raw:
+        self._send_json({"ok": False, "error": "缺少 data"}, status=400)
+        return
+    if raw.startswith("data:") and "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        blob = _b64.b64decode(raw, validate=False)
+    except Exception:
+        self._send_json({"ok": False, "error": "base64 解码失败"}, status=400)
+        return
+    if not blob:
+        self._send_json({"ok": False, "error": "空文件"}, status=400)
+        return
+    if len(blob) > DSH_UPLOAD_MAX_BYTES:
+        self._send_json({"ok": False,
+                         "error": "文件过大（上限 %.0f MB）" % (DSH_UPLOAD_MAX_BYTES / 1048576.0)}, status=413)
+        return
+    d = _dsh_inbox_dir(project)
+    if not d:
+        self._send_json({"ok": False, "error": "解析不到这个项目的工作目录"}, status=400)
+        return
+    mime = str(req.get("mime") or "").strip()
+    name = _dsh_safe_upload_name(req.get("name"), mime)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = os.path.join(d, "%s_%s" % (stamp, name))
+    n = 2
+    while os.path.exists(target):
+        target = os.path.join(d, "%s_%d_%s" % (stamp, n, name))
+        n += 1
+    try:
+        with open(target, "wb") as fh:
+            fh.write(blob)
+    except Exception as e:
+        self._send_json({"ok": False, "error": "写入失败：%s" % e}, status=500)
+        return
+    ext = os.path.splitext(target)[1].lower().lstrip(".")
+    _dsh_log("附件已落盘: project=%s path=%s (%d bytes)" % (project, target, len(blob)))
+    self._send_json({
+        "ok": True, "path": target, "name": os.path.basename(target), "size": len(blob),
+        "mime": mime or _DSH_ARTIFACT_MIME.get(ext, ""),
+        "is_image": ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"),
+    })
+
+
+def _dsh_turn_attachments(project, agent_id, since):
+    """这一轮 Agent 实际写/改过的文件（交付物登记里 ts >= since 的条目）。
+
+    用于把「回复 + 它这一轮产出的图/文件」放在一起：用户要的是像别的 agent 那样，
+    文字下面挂着这次交付的附件，而不是让人自己去侧栏翻。
+    """
+    if not project or not agent_id or not since:
+        return []
+    out, seen = [], set()
+    for e in (_dsh_artifacts_load(project).get(agent_id) or []):
+        if not isinstance(e, dict):
+            continue
+        ts = str(e.get("ts") or "")
+        if not ts or ts < since:
+            continue
+        ap = e.get("path") or ""
+        if not ap or ap in seen:
+            continue
+        seen.add(ap)
+        try:
+            if not os.path.isfile(ap):
+                continue
+            size = os.path.getsize(ap)
+        except Exception:
+            continue
+        out.append({"path": ap, "tool": e.get("tool") or "", "ts": ts, "size": size})
+    out.sort(key=lambda x: x.get("ts") or "")
+    return out
+
+
 def _handle_dsh_artifacts(self, project=None):
     """GET /api/dsh/artifacts?project=X&agent=<id>：列出成员交付物登记（含存在性/大小/类型）"""
     agent_id = (parse_qs(urlparse(self.path).query).get("agent") or [None])[0]
@@ -4341,6 +4470,9 @@ def _handle_dsh_chat(self, project=None):
     self.end_headers()
     _reply_box = {"text": "", "persisted": False}  # server 端累积回复全文（用于历史持久化）
     _write_failed = [False]                        # v2.20.24：SSE 写失败每轮流只记一次日志
+    # v2.20.31：这一轮的时间窗（往前放 1 秒避开同秒边界）——用它认出「本轮真正写出来的文件」，
+    # 挂到回复下面，和别的 agent 一样「文字 + 附件」。
+    _turn_since = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 1))
     def emit(ev):
         t = ev.get("type")
         if t in ("text", "final") and ev.get("text"):
@@ -4350,6 +4482,7 @@ def _handle_dsh_chat(self, project=None):
                 _reply_box["persisted"] = True
                 _dsh_append_history(project, agent_id, [{
                     "role": "assistant", "content": ev["text"],
+                    "attachments": _dsh_turn_attachments(project, agent_id, _turn_since),
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 }])
         try:
@@ -4429,6 +4562,7 @@ def _handle_dsh_chat(self, project=None):
         _dsh_append_history(project, agent_id, [{
             "role": "assistant", "content": _reply_box["text"],
             "usage": {k: usage.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadTokens", "totalTokens")},
+            "attachments": _dsh_turn_attachments(project, agent_id, _turn_since),
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
         }])
     if not ok and not _reply_box["text"]:
@@ -4437,7 +4571,9 @@ def _handle_dsh_chat(self, project=None):
               "error": "这一轮没有拿到任何回复（进程已终止）。可能是会话状态或上游模型异常；请再发一次，"
                        "或在成员卡片右上角切换模型。"})
     emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
-          "usage": usage, "total_usage": member_cfg.get("usage", {})})
+          "usage": usage, "total_usage": member_cfg.get("usage", {}),
+          # v2.20.31：本轮交付的附件（图片/文件），前端直接挂在回复气泡下面
+          "attachments": _dsh_turn_attachments(project, agent_id, _turn_since)})
 
 # ================= 讨论房间 v1（v2.20） =================
 # 主持人点名轮转：每次唤醒携带完整讨论记录 + 「先回应上一位」+ 可选「N 轮后结束」收敛提示。
@@ -5152,6 +5288,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 会话清空（v2.17）
         if parsed.path == "/api/dsh/history/clear":
             _handle_dsh_history_clear(self, project)
+            return
+
+        # API: 拖进聊天框的图片/附件落盘（v2.20.31）
+        if parsed.path == "/api/dsh/upload":
+            _handle_dsh_upload(self, project)
             return
 
         # API: 终端 Agent 审批（v2.18 进程托管权限批准闭环）
