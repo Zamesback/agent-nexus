@@ -1,3 +1,34 @@
+## v2.20.32 — A stop button, because waiting was the only option
+
+Zames: "you can't interrupt it — you have to sit and wait until it finishes; add something like a
+pause button."
+
+Until now a running turn could only end by itself, by the idle watchdog (180 s without an event) or by
+the hard turn budget (80 steps / 25 min). None of those means "stop now".
+
+`_dsh_run` now registers the live process handle per (project, member) right after Popen and drops it
+once the process exits. `POST /api/dsh/stop?project=&agent=` looks it up and sends `SIGKILL` to the
+process group — the same group kill the watchdog uses, so the member's children go with it — with
+`proc.kill()` as a fallback, and says honestly whether there was nothing to stop or the kill failed.
+
+A stopped turn is not a failure. The exit path checks the stop request **before** the watchdog and
+exit-code branches, marks the turn as user-stopped, logs `dsh 已被用户叫停，交付已有回复` and returns
+`ok=True`, so text that already streamed is persisted and shown. `dsh_done` carries `stopped: true` and
+the card appends "⏹ 你叫停了这一轮 —— 以上是已经产出的部分。" (or says no reply was produced). A user
+stop also suppresses the automatic retry in both the chat path and the auto-wake worker: that retry
+exists for upstream hiccups, not for "I wanted it to stop".
+
+The card grew a `⏹ 停止` button that appears whenever that member has a turn in flight — including a
+board-driven wake the user never started — and disappears when nothing is running. A failed stop says
+why instead of pretending it worked. And when a turn ends, any approval card it left pending is retired
+on the spot: a killed process cannot answer its own approval, so the card used to keep chiming for up to
+120 s, which reads exactly like "it is still waiting for you".
+
+Tests: `tests/t24_stop_test.js` 37/37 and `tests/t24_stop_units_test.py` 13/13, both verified red first
+(removing the stop claim, removing the button). Full regression green: 23 files, 919 assertions — T5 27,
+T6 12, T7 22, T8 13, T9 36, T10 82, T11 49, T12 30, T13 37, T14 114, T15 64, T16 40, T17 35, T18 41,
+T19 25, T20 61, T21 55 + 17, T22 45, T23 48 + 16, T24 37 + 13.
+
 ## v2.20.31 — Drop an image on a hosted member, and get its files back under the reply
 
 Zames asked for the two things the chat box could not do: drag a picture into a hosted member's chat,

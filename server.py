@@ -2316,7 +2316,12 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
             # final，于是 _dsh_run 回报 ok=True 却一个字都没产出——唤醒就这样静默空转了。
             # 「无输出」与「失败」一视同仁：换一个新会话重试一次（冷启动也重试——重试走的是
             # 全新会话，本来就不依赖旧 session_id；旧守卫会让模型刚被换过时恰好跳过重试）。
-            if not ok or not box["text"]:
+            # v2.20.32：用户叫停的那一轮不重试
+            if (project, agent_id) in _DSH_STOPPED:
+                _DSH_STOPPED.discard((project, agent_id))
+                _dsh_log("自动唤醒被用户叫停，不重试: project=%s agent=%s" % (project, agent_id))
+                ok = True
+            elif not ok or not box["text"]:
                 if not box["text"]:
                     _dsh_log("自动唤醒本轮无输出（上游模型可能不可用），换新会话重试: project=%s agent=%s" % (project, agent_id))
                 time.sleep(3)
@@ -3918,6 +3923,84 @@ def _dsh_nudge_send(session_id, level, text):
         return False
 
 
+# ===== v2.20.32：用户叫停 =====
+# 为什么需要：一轮可能跑 30 分钟，以前除了等没有别的办法（watchdog 只处理「没动静」，
+# 预算上限是兜底）。用户要的是「立刻别干了」——所以这里记住正在跑的进程句柄，
+# 停止接口直接杀进程组；已经产出的回复照常交付落盘，日志如实写「用户叫停」。
+_DSH_PROCS = {}       # (project, agent_id) -> {"proc": Popen, "pid": int, "since": str, "label": str}
+_DSH_STOP_REQ = set()  # 用户点了停止，等这一轮退出时认领
+_DSH_STOPPED = set()   # 这一轮确实是被叫停的（供上层如实回报 stopped=True）
+
+def _dsh_proc_register(project, agent_id, proc, label=""):
+    try:
+        _DSH_PROCS[(project, agent_id)] = {
+            "proc": proc, "pid": proc.pid,
+            "since": time.strftime("%H:%M:%S"),
+            "label": label or "",
+        }
+    except Exception:
+        pass
+
+def _dsh_proc_unregister(project, agent_id, proc=None):
+    key = (project, agent_id)
+    rec = _DSH_PROCS.get(key)
+    if rec is None:
+        return
+    if proc is not None and rec.get("proc") is not proc:
+        return  # 已经被下一轮覆盖了，别误删
+    _DSH_PROCS.pop(key, None)
+
+def _dsh_stop_turn(project, agent_id):
+    """叫停这个成员正在跑的一轮。返回 (ok, info_or_error)。"""
+    key = (project, agent_id)
+    rec = _DSH_PROCS.get(key)
+    if not rec:
+        return False, "这个成员现在没有在跑的一轮"
+    proc = rec.get("proc")
+    try:
+        if proc is not None and proc.poll() is not None:
+            _DSH_PROCS.pop(key, None)
+            return False, "这一轮刚刚已经结束了"
+    except Exception:
+        pass
+    _DSH_STOP_REQ.add(key)
+    pid = rec.get("pid") or (getattr(proc, "pid", 0) if proc is not None else 0)
+    killed = False
+    try:
+        if pid:
+            os.killpg(pid, signal.SIGKILL)   # 进程组级：连同它起的子进程
+            killed = True
+    except Exception:
+        pass
+    try:
+        if proc is not None:
+            proc.kill()
+            killed = True
+    except Exception:
+        pass
+    if not killed:
+        _DSH_STOP_REQ.discard(key)
+        return False, "终止进程失败（可能已经退出）"
+    _dsh_log("用户叫停: project=%s agent=%s pid=%s" % (project, agent_id, pid))
+    return True, {"pid": pid, "since": rec.get("since") or "", "label": rec.get("label") or ""}
+
+
+def _handle_dsh_stop(self, project=None):
+    """POST /api/dsh/stop?project=X&agent=<id>：叫停该成员正在跑的一轮（已产出的回复照常交付）"""
+    parsed = urlparse(self.path)
+    params = parse_qs(parsed.query)
+    agent_id = params.get("agent", [None])[0] or ""
+    if not project or not agent_id:
+        self._send_json({"ok": False, "error": "缺少 project / agent 参数"}, status=400)
+        return
+    ok, info = _dsh_stop_turn(project, agent_id)
+    if not ok:
+        self._send_json({"ok": False, "error": info}, status=409)
+        return
+    self._send_json({"ok": True, "pid": info.get("pid"), "since": info.get("since"),
+                     "label": info.get("label"), "note": "已叫停，这一轮已产出的回复会照常交付"})
+
+
 def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=False):
     """拉起 dsh headless 进程（按成员 profile），流式转发 NDJSON 事件。返回 (ok, session_id, usage_agg)
     kill_after_final：讨论场景专用——收到 final（最终回复）即终止进程。
@@ -3987,6 +4070,7 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                          cwd=_run_cwd,
                          start_new_session=True)  # v2.20.3：独立进程组，杀进程时连带子进程
         _dsh_log("Popen ok pid=%s cmd0=%s" % (proc.pid, proc.args[0] if isinstance(proc.args, list) else ""))
+        _dsh_proc_register(project, agent_id, proc, "对话")   # v2.20.32：停止按钮要用它
         # v2.19.3：watchdog 超时终止——stdout 阻塞读时 wait(timeout) 永远到不了，
         # 必须由独立线程在超时后 kill，stdout 才会 EOF、读取循环才能退出。
         # v2.20.2：改为空闲检测——最后事件后 180s 无任何进展才终止；
@@ -4191,7 +4275,14 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                 _dsh_log("dsh final 已交付（kill_after_final），终止 pid=%s" % proc.pid)
                 break
         proc.wait(timeout=30)
+        _dsh_proc_unregister(project, agent_id, proc)   # v2.20.32：进程已退出，句柄不再可用
         err = proc.stderr.read()[:800] if proc.stderr else ""
+        # v2.20.32：被用户叫停的，按「已交付已有回复」收口——不能记成超时或子进程失败
+        if (project, agent_id) in _DSH_STOP_REQ:
+            _DSH_STOP_REQ.discard((project, agent_id))
+            _DSH_STOPPED.add((project, agent_id))
+            _dsh_log("dsh 已被用户叫停，交付已有回复: project=%s agent=%s" % (project, agent_id))
+            return (True, new_sid, usage_agg)
         if _wd_stop[0]:
             if _sid_err[0]:
                 # v2.20.11：会话目录不匹配——不是「超时但有回复」，而是「一个字都没有」。
@@ -4524,7 +4615,12 @@ def _handle_dsh_chat(self, project=None):
         try:
             ok, new_sid, usage = _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=True)
             _dsh_log("_dsh_run 返回: ok=%s sid=%s usage=%s" % (ok, new_sid, usage))
-            if (not ok or not _reply_box["text"]) and session_id:
+            # v2.20.32：用户叫停的那一轮不重试——他不是想要「再跑一次」，是想让它停下
+            _stopped = (project, agent_id) in _DSH_STOPPED
+            if _stopped:
+                _DSH_STOPPED.discard((project, agent_id))
+                _dsh_log("本轮为用户叫停，不自动重试: project=%s agent=%s" % (project, agent_id))
+            if (not _stopped) and (not ok or not _reply_box["text"]) and session_id:
                 # session 写句柄占用等瞬态冲突：等 3 秒重试一次；仍失败则换新会话
                 # v2.20.11：与自动唤醒同一口径——「进程正常退出但一个字都没说」不算成功。
                 # 以前只看 ok，于是 dsh 因为会话目录不匹配等原因空转退出时，界面既没有回复
@@ -4571,6 +4667,7 @@ def _handle_dsh_chat(self, project=None):
               "error": "这一轮没有拿到任何回复（进程已终止）。可能是会话状态或上游模型异常；请再发一次，"
                        "或在成员卡片右上角切换模型。"})
     emit({"type": "dsh_done", "ok": ok, "session_id": new_sid,
+          "stopped": bool(_stopped),   # v2.20.32：这一轮是用户叫停的
           "usage": usage, "total_usage": member_cfg.get("usage", {}),
           # v2.20.31：本轮交付的附件（图片/文件），前端直接挂在回复气泡下面
           "attachments": _dsh_turn_attachments(project, agent_id, _turn_since)})
@@ -5288,6 +5385,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 会话清空（v2.17）
         if parsed.path == "/api/dsh/history/clear":
             _handle_dsh_history_clear(self, project)
+            return
+
+        # API: 叫停正在跑的一轮（v2.20.32）
+        if parsed.path == "/api/dsh/stop":
+            _handle_dsh_stop(self, project)
             return
 
         # API: 拖进聊天框的图片/附件落盘（v2.20.31）

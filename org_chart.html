@@ -1653,6 +1653,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
         <div class="dsh-input-row">
           <input id="dshInput" placeholder="直接给终端 Agent 发指令（实时回复）…" onkeydown="if(event.key==='Enter'&&!event.isComposing)sendToTerminal()">
           <button class="btn mini" id="dshMicBtn" onclick="toggleDshVoice()" title="语音输入：说话变文字（再点一次停止）">🎤</button>
+          <button class="btn mini danger" id="dshStopBtn" style="display:none" onclick="stopDshTurn()" title="叫停正在跑的这一轮（已产出的回复照常交付）">⏹ 停止</button>
           <button class="btn primary" id="dshSendBtn" onclick="sendToTerminal()">发送</button>
         </div>
         <div class="voice-hint" id="dshVoiceHint"></div>
@@ -1672,6 +1673,7 @@ function openPerson(agentId) {  const a = agentById[agentId];
   const msel = document.getElementById('dshModelSelect');
   if (msel) loadDshModel(msel);
   if (isTerminalAgent(a)) initDshDrop();      // v2.20.31：支持把图片/文件拖进聊天框（也支持粘贴）
+  if (isTerminalAgent(a)) dshStopVisible(!!dshStreams[agentId]);   // v2.20.32：有在跑的一轮才显示「停止」
   dshClearPendingAtt();                        // 切卡片就清掉上一个成员待发送的附件
   if (isTerminalAgent(a)) loadDshHistory();  // v2.17：从服务端加载该成员聊天历史（内部也会滚到底）
   if (isTerminalAgent(a)) loadArtifacts();   // v2.20.6：列出该成员写过的交付物（可就地预览）
@@ -2216,6 +2218,7 @@ function dshReattach(who) {
   if (!run.finished) {
     dshActEnsure(who, run.t0);
     dshActivityShow('这一轮还在跑（接着看）…', who);
+    dshStopVisible(true);
   }
   flushApprovalQueue(who);
 }
@@ -2250,6 +2253,7 @@ async function loadDshRunning() {
     if (!r) return;
     dshAct.t0 = Date.now() - Math.round((r.elapsed || 0) * 1000);
     dshActivityShow('这个成员还在跑（' + (r.label || '对话') + '）…', who);
+    dshStopVisible(true);   // v2.20.32：不是当前页发起的活也能叫停
   } catch (e) {}
 }
 function dshTotalTokens() { return dshServerUsage.totalTokens || 0; }
@@ -2628,6 +2632,38 @@ function initDshDrop() {
   dshRenderPendingAtt();
 }
 
+/* ===== v2.20.32：叫停 =====
+   以前一轮跑起来只能硬等（watchdog 只管「没动静」，预算上限是兜底）。
+   停止 = 服务端杀掉该成员的进程组；已经流出来的回复照常落盘、照常显示。 */
+function dshStopVisible(on) {
+  const b = document.getElementById('dshStopBtn');
+  if (!b) return;
+  b.style.display = on ? '' : 'none';
+  b.disabled = false;
+  b.textContent = '⏹ 停止';
+}
+async function stopDshTurn() {
+  const who = currentDshAgent || 'terminal';
+  const btn = document.getElementById('dshStopBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '停止中…'; }
+  try {
+    const r = await fetch('/api/dsh/stop' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '') +
+                          '&agent=' + encodeURIComponent(who), { method: 'POST' });
+    const j = await r.json().catch(function () { return {}; });
+    dshActEnsure(who, Date.now());
+    if (!j.ok) {
+      if (btn) { btn.disabled = false; btn.textContent = '⏹ 停止'; }
+      dshActivityPush('没停成：' + (j.error || ('HTTP ' + r.status)), who);
+    } else {
+      dshActivityPush('⏹ 已发出叫停（pid ' + (j.pid || '?') + '），等它收口…', who);
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⏹ 停止'; }
+    dshActEnsure(who, Date.now());
+    dshActivityPush('叫停请求失败：' + e.message, who);
+  }
+}
+
 async function sendToTerminal() {
   const input = document.getElementById('dshInput');
   const btn = document.getElementById('dshSendBtn');
@@ -2660,6 +2696,7 @@ async function sendToTerminal() {
   };
   dshStreams[targetAgent] = run;
   dshActEnsure(targetAgent, run.t0);
+  dshStopVisible(true);   // v2.20.32：这一轮跑起来了，露出「停止」
   dshClearPendingAtt();   // 附件已经写进消息，清掉输入区的待发条
   dshAppend('user', text, targetAgent);
   dshActivityShow('已发送，正在唤醒 Agent…', targetAgent);
@@ -2778,6 +2815,11 @@ async function sendToTerminal() {
         if (t === 'dsh_done') {
           dshActivityHide(targetAgent);  // v2.19.3 兜底；v2.20.24 顺带停掉秒表
           if (!ev.ok && run.replyContent === '' && !run.gotReply) dshAppend('assistant', '⚠️ 会话未完成（超时或进程中断），没有产出回复。', targetAgent);  // v2.19.3 不再静默
+          if (ev.stopped) {   // v2.20.32：如实说明这一轮是你叫停的，已产出的部分仍然保留
+            dshAppend('assistant', run.replyContent
+              ? '⏹ 你叫停了这一轮 —— 以上是已经产出的部分。'
+              : '⏹ 你叫停了这一轮，本轮没有产出回复。', targetAgent);
+          }
           const usage = ev.usage || {};
           const total = ev.total_usage || {};
           // v2.20.23：回复只进它自己那个成员的历史缓存——以前进的是全局数组，会把别人的「上文」串进来
@@ -2789,6 +2831,8 @@ async function sendToTerminal() {
             const rb = (run.bubbleEl && box.contains(run.bubbleEl)) ? run.bubbleEl : box.lastElementChild;
             if (rb) rb.insertAdjacentHTML('beforeend', `<div class="dsh-usage">⟐ in ${fmtTokens(usage.inputTokens || 0)} / out ${fmtTokens(usage.outputTokens || 0)} / 累计 ${fmtTokens(total.totalTokens || 0)}</div>`);
           }
+          // v2.20.32：这一轮已经结束，它挂起的审批不可能再生效——立刻收卡（被叫停时尤其重要）
+          expireApprovalsForAgent(targetAgent, ev.stopped ? '本轮被叫停，审批作废' : '本轮已结束，审批作废');
           // v2.20.31：这一轮真正写出来的图/文件，直接挂在回复气泡下面（像别的 agent 那样）
           const atts = ev.attachments || [];
           if (atts.length && run.gotReply) {
@@ -2815,6 +2859,7 @@ async function sendToTerminal() {
     run.finished = true;
     if (dshStreams[targetAgent] === run) delete dshStreams[targetAgent];
     dshActClear(targetAgent);   // v2.20.24：流结束不留一个转不完的圈；v2.20.29：按成员清
+    if (targetAgent === currentDshAgent) dshStopVisible(!!dshStreams[currentDshAgent]);
     btn.disabled = false; btn.textContent = '发送';
   }
 }
@@ -2961,6 +3006,25 @@ function dropQueuedApproval(requestId) {
   });
 }
 
+// v2.20.32：一轮结束了（尤其是被用户叫停），它挂起的审批请求就不可能再生效——
+// 卡片必须立刻失效，否则会一直响铃到 120 秒超时，像是还在等你批准。
+function expireApprovalsForAgent(agentId, msg) {
+  try {
+    const list = document.getElementById('dshApprovalList');
+    if (list) {
+      Array.prototype.slice.call(list.querySelectorAll('.dsh-approval')).forEach(function (card) {
+        if (!agentId || card.dataset.agent === agentId) {
+          const rid = String(card.id || '').replace(/^apv-/, '');
+          if (rid) expireApprovalCard(rid, msg || '本轮已结束，审批作废');
+        }
+      });
+    }
+    Object.keys(dshApprovalQueue).forEach(function (a) {
+      if (!agentId || a === agentId) delete dshApprovalQueue[a];
+    });
+  } catch (e) {}
+}
+
 function renderApproval(ev) {
   const list = document.getElementById('dshApprovalList');
   if (!list) return;
@@ -2977,6 +3041,7 @@ function renderApproval(ev) {
   const card = document.createElement('div');
   card.className = 'dsh-approval';
   card.id = 'apv-' + rid;
+  card.dataset.agent = ev.agentId || currentDshAgent || '';   // v2.20.32：这一轮结束时按成员收卡
   card.innerHTML =
     '<div class="apv-head">⚠️ 需要你的批准 · <span class="apv-tool">' + esc(toolName) + '</span></div>' +
     '<div class="apv-reason">' + esc(reason || '执行此操作需要权限升级') + '</div>' +
@@ -3376,7 +3441,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.31';
+const BUILD_VERSION = 'v2.20.32';
 let dshPageStamp = '';
 function showBuildTag() {
   try {

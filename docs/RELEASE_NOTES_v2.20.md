@@ -2,7 +2,7 @@
 
 > The v2.20 arc is **process hosting**: an agent stops being a prompt you paste and becomes a real
 > local process that the board can wake, watch, and ask *you* for permission before it touches
-> anything. This is the write-up of what landed between v2.20.6 and v2.20.31.
+> anything. This is the write-up of what landed between v2.20.6 and v2.20.32.
 
 ![Org chart](screenshots/05-org-chart.png)
 
@@ -140,6 +140,16 @@ the input, and an attachment-only message is allowed.
 **Back out of the reply.** Everything the turn actually wrote — the artifact registry already records
 `write` / `edit` / `present` with timestamps — is attached to that reply as thumbnails or file chips that
 open the existing preview. The window is the turn itself: earlier files are not re-attached.
+
+## 12. Stopping a turn
+
+A running turn can be called off: the card shows `⏹ 停止` whenever that member has work in flight — a
+chat turn or a board-driven wake you never started. The server kills the member's process group; the
+text that already streamed is kept and persisted, and the card says plainly that you stopped it. A stop
+is never retried automatically (the retry exists for upstream hiccups, not for "stop now"), and a stop
+that cannot reach the process reports why instead of pretending success. When a turn ends, any approval
+card it left pending is retired immediately — a killed process cannot answer its own approval, and a
+card that keeps chiming for two minutes reads exactly like "it is still waiting for you".
 
 ## Running it
 
