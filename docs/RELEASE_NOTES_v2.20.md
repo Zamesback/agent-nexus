@@ -2,7 +2,7 @@
 
 > The v2.20 arc is **process hosting**: an agent stops being a prompt you paste and becomes a real
 > local process that the board can wake, watch, and ask *you* for permission before it touches
-> anything. This is the write-up of what landed between v2.20.6 and v2.20.32.
+> anything. This is the write-up of what landed between v2.20.6 and v2.20.33.
 
 ![Org chart](screenshots/05-org-chart.png)
 
@@ -150,6 +150,13 @@ is never retried automatically (the retry exists for upstream hiccups, not for "
 that cannot reach the process reports why instead of pretending success. When a turn ends, any approval
 card it left pending is retired immediately — a killed process cannot answer its own approval, and a
 card that keeps chiming for two minutes reads exactly like "it is still waiting for you".
+
+## 13. Model choices are verified, not guessed
+
+The model picker only offers what the member's provider profile actually configures. A whitelist entry
+is a *cost* gate, not proof the provider has the model; `_dsh_verify_model` now checks both and refuses
+to start with an explanation naming the models that member does have. If the CLI ever reports
+`UNKNOWN_MODEL`, the card says so immediately instead of spinning until the watchdog.
 
 ## Running it
 

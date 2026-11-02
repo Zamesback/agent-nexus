@@ -1,3 +1,42 @@
+## v2.20.33 — A model the dropdown offered, but the provider never had
+
+Zames switched a hosted member to "DeepSeek V4 Flash Vision" and it stopped answering. The log says
+exactly why:
+
+```
+dsh: UNKNOWN_MODEL: pi-ai provider "opencode-go-extra" has no configured model
+     "deepseek-v4-flash-vision"
+```
+
+The member's provider profile configures `deepseek-flash`, `deepseek-v4.1-flash`, `mimo-v2.6-*`,
+`minimax-m2.5`, `longcat-2.5-preview-free` and `space-bunny-free`. The UI offered six models, and three
+of them (`deepseek-v4-flash`, `deepseek-v4-flash-vision`, `deepseek-v4-flash-vision-experience`) were
+never configured anywhere. Selecting one made the CLI exit immediately with `UNKNOWN_MODEL`, which
+matched none of the stderr patterns the server watched for — so nothing was reported, the card sat on
+"working", and the idle watchdog took 180 s to kill it. From the outside: it just stopped replying.
+
+Three fixes:
+
+1. **The whitelist only contains models that exist.** `space-bunny-free`, `deepseek-flash`,
+   `deepseek-v4.1-flash`. (Both of the latter declare `input: [text, image]`, so image attachments work
+   without a separately-named "vision" model.)
+2. **Two gates instead of one.** The whitelist is the cost gate; `_dsh_verify_model` now also reads the
+   profile's `cordis.patch.yml` and refuses to start when the provider does not configure the chosen
+   model, naming the models that member actually has. `GET /api/dsh/model` returns the intersection, so
+   the dropdown cannot offer something the profile lacks.
+3. **`UNKNOWN_MODEL` fails fast and out loud.** The stderr watcher recognises `unknown_model` /
+   `has no configured model`, emits a `dsh_error` that names the available models and kills the process
+   instead of leaving the card spinning until the watchdog.
+
+Tests: `tests/t25_model_guard_test.py` 14/14 — the three removed ids may not come back, label/whitelist
+parity, the profile parser against a synthetic profile, the intersection (including the "profile
+missing → fall back to the whitelist" case so a broken machine cannot empty the dropdown), the
+fail-fast wiring, and a live assertion that every whitelisted model really is configured in this
+machine's template profile. Verified red first by putting `deepseek-v4-flash-vision` back (3 failures).
+Full regression green: 24 files, 933 assertions — T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49,
+T12 30, T13 37, T14 114, T15 64, T16 40, T17 35, T18 41, T19 25, T20 61, T21 55 + 17, T22 45,
+T23 48 + 16, T24 37 + 13, T25 14.
+
 ## v2.20.32 — A stop button, because waiting was the only option
 
 Zames: "you can't interrupt it — you have to sit and wait until it finishes; add something like a

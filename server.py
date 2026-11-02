@@ -2748,17 +2748,19 @@ def _dsh_log(msg):
     except Exception:
         pass
 
-DSH_MODEL_WHITELIST = {"space-bunny-free", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash",
-                       "deepseek-v4-flash-vision", "deepseek-v4-flash-vision-experience"}
+# v2.20.33：只留「profile 里真的配了」的模型。
+# 起因（用户报障）：下拉框里有 deepseek-v4-flash / -vision / -vision-experience 三项，
+# 但成员 profile 的 provider 里根本没有它们。选中后 CLI 直接报
+#   UNKNOWN_MODEL: provider "opencode-go-extra" has no configured model "..."
+# 然后进程空转 180 秒被 watchdog 杀掉——用户看到的就是「它不回我了」。
+# 现在这份白名单是「成本白名单」，另有一道 profile 校验（见 _dsh_verify_model）。
+DSH_MODEL_WHITELIST = {"space-bunny-free", "deepseek-flash", "deepseek-v4.1-flash"}
 
 DSH_DEFAULT_MODEL = "space-bunny-free"
 DSH_MODEL_LABELS = {
     "space-bunny-free": "Space Bunny（限时免费）",
     "deepseek-flash": "DeepSeek Flash（旧别名）",
-    "deepseek-v4-flash": "DeepSeek V4 Flash",
-    "deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
-    "deepseek-v4-flash-vision": "DeepSeek V4 Flash Vision",
-    "deepseek-v4-flash-vision-experience": "DeepSeek V4 Flash Vision Experience",
+    "deepseek-v4.1-flash": "DeepSeek V4.1 Flash（支持看图）",
 }
 
 
@@ -3202,6 +3204,37 @@ def _dsh_save_cfg(project, cfg):
     except Exception:
         pass
 
+def _dsh_profile_model_ids(profile_name):
+    """读 profile 的 cordis.patch.yml，列出它真正声明过的模型 id。
+
+    为什么需要：白名单是「允许花这个钱」的名单，不代表这个 provider 真的配了它。
+    两者错位时 CLI 会报 UNKNOWN_MODEL，进程空转到 watchdog 才死——用户只看到「不回我」。
+    这里把 profile 的事实来源拿来，启动前就能拦住。
+    """
+    if not profile_name:
+        return set()
+    try:
+        path = os.path.join(os.path.expanduser("~"), ".dsh", "profiles", profile_name, "cordis.patch.yml")
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return set()
+    ids = set()
+    for line in text.splitlines():
+        m = re.match(r"\s*-\s+id:\s*([A-Za-z0-9_.\-]+)\s*$", line)
+        if m:
+            ids.add(m.group(1))
+    return ids
+
+
+def _dsh_usable_models(profile_name=None):
+    """下拉框该显示的模型：白名单 ∩ profile 真实配置；读不到 profile 时退回白名单。"""
+    ids = _dsh_profile_model_ids(profile_name or DSH_PROFILE_TEMPLATE)
+    if not ids:
+        return set(DSH_MODEL_WHITELIST)
+    return {m for m in DSH_MODEL_WHITELIST if m in ids}
+
+
 def _dsh_verify_model(project=None, profile_name=DSH_PROFILE):
     """启动前校验 profile 锁定的模型在白名单内（防误选昂贵模型）
     project 非空时同时挂上模型锁 overlay（--patch），与运行时一致——否则 dump-config
@@ -3227,6 +3260,12 @@ def _dsh_verify_model(project=None, profile_name=DSH_PROFILE):
                 in_agent_model = False
         if model not in DSH_MODEL_WHITELIST:
             return False, f"模型校验失败：当前 {provider}/{model} 不在白名单 {sorted(DSH_MODEL_WHITELIST)}，拒绝启动"
+        # v2.20.33：白名单只说明「允许花钱」，还得确认这个 provider 真的配了它
+        known = _dsh_profile_model_ids(profile_name)
+        if known and model not in known:
+            return False, ("模型校验失败：provider %s 没有配置模型 %s（会报 UNKNOWN_MODEL）。"
+                           "这个成员可用的模型：%s —— 请在成员卡片右上角换一个。"
+                           % (provider, model, "、".join(sorted(m for m in DSH_MODEL_WHITELIST if m in known)) or "（无）"))
         return True, f"模型校验通过：{provider}/{model}"
     except Exception as e:
         return False, f"模型校验异常：{e}"
@@ -4178,6 +4217,24 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                         except Exception:
                             pass
                         continue
+                    # v2.20.33：provider 没配这个模型 → 立刻失败并说清楚（别让用户对着卡片等 180 秒）
+                    if "unknown_model" in low or "has no configured model" in low:
+                        _err_flag[0] = True
+                        if emit:
+                            emit({"type": "dsh_error",
+                                  "error": "这个模型在该 provider 里没有配置（UNKNOWN_MODEL）——"
+                                           "请点成员卡片右上角的模型下拉框换一个可用的（当前可用的只有 "
+                                           + "、".join(sorted(DSH_MODEL_WHITELIST)) + "）。"})
+                        _wd_stop[0] = True
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        continue
                     if ("model is unavailable" in low or "model_not_found" in low or
                             ("invalid_request" in low and "unavailable" in low)):
                         _err_flag[0] = True
@@ -4314,8 +4371,9 @@ def _handle_dsh_model(self, project=None):
             model = (cfg.get("dsh") or {}).get("model") or DSH_DEFAULT_MODEL
             if model not in DSH_MODEL_WHITELIST:
                 model = DSH_DEFAULT_MODEL
+            usable = _dsh_usable_models()
             self._send_json({"ok": True, "model": model,
-                             "whitelist": sorted(DSH_MODEL_WHITELIST),
+                             "whitelist": sorted(usable or DSH_MODEL_WHITELIST),
                              "labels": DSH_MODEL_LABELS})
             return
         try:
