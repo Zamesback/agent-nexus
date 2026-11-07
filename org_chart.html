@@ -616,6 +616,17 @@
   .dsh-att-chip .x { cursor: pointer; color: var(--dim-2); font-weight: 700; }
   .dsh-att-chip .x:hover { color: #f85149; }
   .person-right.dragover { outline: 2px dashed var(--accent); outline-offset: -6px; }
+  /* v2.20.37：公司视图（员工的跨项目组织） */
+  .proj-bar-sep { height: 1px; background: var(--line); margin: 10px 12px; opacity: .7; }
+  .dept-badge { display: inline-block; font-size: 10px; font-family: var(--mono); color: var(--dim-1);
+                border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; margin-right: 6px; }
+  body.company-mode .side, body.company-mode #splitRight { display: none !important; }
+  .emp-mem-full { font-size: 12px; line-height: 1.65; color: var(--dim-1); white-space: pre-wrap;
+                  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+                  padding: 10px 12px; max-height: 260px; overflow-y: auto; font-family: var(--mono); margin: 0; }
+  .dept-name-input { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+                     border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+  .dept-name-input:focus { outline: none; border-color: var(--accent); }
   /* v2.20.36：附件在页内预览（新窗口打开经常是一片空白） */
   .modal.att-preview { width: 1100px; max-width: 94vw; height: 82vh; display: flex; flex-direction: column; }
   .att-preview .att-title { font-size: 13px; font-family: var(--mono); overflow: hidden;
@@ -658,8 +669,8 @@
     <div class="topbar-right">
       <button class="btn" id="btn-board" title="切到任务看板">看板</button>
       <button class="btn" id="btn-discuss" title="多人讨论室（终端托管成员）" onclick="openDiscuss()">讨论室</button>
-      <button class="btn" id="btn-employees" title="员工库：跨项目记忆，可指派进本项目" onclick="openEmp()">员工</button>
       <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
+      <button class="btn" id="btn-depts" title="管理部门（扁平标签）" onclick="openDeptMgr()" style="display:none">部门</button>
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
       <button class="btn ghost" id="btn-layout" onclick="toggleLayout()" title="切换组织图布局方向（左右/上下）">⇄ 左右</button>
       <button class="btn ghost" id="btn-reset" onclick="resetLayout()" title="恢复自动布局">重置布局</button>
@@ -676,6 +687,11 @@
     <div class="proj-bar" id="projBar">
       <div class="proj-bar-head">项目<button class="proj-collapse" id="projCollapse" onclick="toggleProjBar(true)" title="收起项目栏（画布更宽）" aria-label="收起项目栏">«</button></div>
       <div class="proj-list" id="projList"></div>
+      <div class="proj-bar-sep"></div>
+      <div class="proj-bar-head">公司</div>
+      <div class="proj-list" id="companyList">
+        <div class="proj-item" id="companyEntry" onclick="gotoCompany()" title="公司正式员工（跨项目组织）">公司员工<span class="cnt" id="companyCount">—</span></div>
+      </div>
     </div>
     <div class="splitter" id="splitLeft" role="separator" aria-orientation="vertical" aria-label="调整项目栏宽度" title="拖动调整宽度 · 双击复位"></div>
     <div class="canvas-wrap" id="canvasWrap">
@@ -713,6 +729,23 @@
   </div>
 
   <!-- 加位子弹窗 -->
+  <div class="modal-mask" id="deptModal" onclick="if(event.target===this)closeDeptMgr()">
+    <div class="modal" style="width:540px;">
+      <div class="modal-head">
+        <div style="font-size:15px;font-weight:600;">部门</div>
+        <button class="modal-close" onclick="closeDeptMgr()">✕</button>
+      </div>
+      <div id="deptList" class="emp-list"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <input id="deptNewName" class="dept-name-input" placeholder="新部门名，如：设计部" maxlength="20" style="flex:1;">
+        <button class="btn primary" onclick="addDept()">添加</button>
+      </div>
+      <div style="font-size:11px;color:var(--dim-2);margin-top:10px;line-height:1.6;">
+        部门是扁平标签（一人一个，不分层级）；上下级用员工卡里的「汇报给谁」表达。
+      </div>
+    </div>
+  </div>
+
   <div class="modal-mask" id="attModal" onclick="if(event.target===this)dshCloseAtt()">
     <div class="modal att-preview">
       <div class="modal-head">
@@ -724,16 +757,6 @@
       </div>
       <div class="att-body"><iframe id="attFrame" referrerpolicy="no-referrer"></iframe></div>
       <div class="att-hint">空白 / 报错：文件可能已被移动或删除，或不在允许预览的目录内。</div>
-    </div>
-  </div>
-
-  <div class="modal-mask" id="empModal" onclick="if(event.target===this)closeEmp()">
-    <div class="modal" style="width:680px;">
-      <div class="modal-head">
-        <div style="font-size:15px;font-weight:600;">👤 员工库 · 跨项目记忆</div>
-        <button class="modal-close" onclick="closeEmp()">✕</button>
-      </div>
-      <div id="empList" class="emp-list"><div class="work-empty">加载中…</div></div>
     </div>
   </div>
 
@@ -854,6 +877,8 @@ function toggleTheme() {
 /* ===== 状态 ===== */
 const params = new URLSearchParams(location.search);
 const PROJECT = params.get('project') || '';
+const VIEW = params.get('view') || '';        // v2.20.37：'' = 项目视图，'company' = 公司视图
+const COMPANY_KEY = '__company__';
 let board = null;      // 看板数据
 let nodePos = {};      // agent_id -> {x, y, level}
 let agentById = {};
@@ -3502,50 +3527,6 @@ function openBoard() {
 /* ===== v2.20.35：员工（跨项目记忆，P0） =====
    一个成员在项目里表现好了 → 转成员工（提炼看板事实成记忆）→ 进新项目时带着经验。
    设计稿：docs/DESIGN-员工-跨项目记忆-v1.md */
-async function openEmp() {
-  document.getElementById('empModal').classList.add('show');
-  await loadEmpList();
-}
-function closeEmp() { document.getElementById('empModal').classList.remove('show'); }
-async function loadEmpList() {
-  const box = document.getElementById('empList');
-  if (!box) return;
-  box.innerHTML = '<div class="work-empty">加载中…</div>';
-  try {
-    const r = await fetch('/api/employees' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''));
-    const j = await r.json();
-    const items = j.employees || [];
-    if (!items.length) {
-      box.innerHTML = '<div class="work-empty">还没有员工 —— 打开一个终端托管成员的卡片，点「转为员工」。</div>';
-      return;
-    }
-    box.innerHTML = items.map(function (e) {
-      const projs = (e.projects || []).map(function (p) {
-        return esc(p.project) + (p.to ? '（已退出）' : '');
-      }).join('、') || '—';
-      const act = e.in_project
-        ? '<span class="emp-meta">已在本项目</span>'
-        : '<button class="btn mini" onclick="empAssign(\'' + esc(e.id) + '\')">指派到本项目</button>';
-      return '<div class="emp-item">' +
-        '<div class="emp-head"><span class="emp-name">' + esc(e.name || e.id) + '</span>' +
-        '<span class="emp-meta">' + esc(e.role || '') + '</span>' +
-        '<span class="emp-meta" style="margin-left:auto;">记忆 ' + fmtBytes(e.memory_bytes || 0) + '</span></div>' +
-        '<div class="emp-meta">履历：' + projs + '</div>' +
-        '<div class="emp-acts">' + act +
-        '<button class="btn mini" onclick="empView(\'' + esc(e.id) + '\')">看记忆</button></div></div>';
-    }).join('');
-  } catch (err) {
-    box.innerHTML = '<div class="work-empty">加载失败：' + esc(err.message) + '</div>';
-  }
-}
-async function empView(id) {
-  try {
-    const r = await fetch('/api/employees?id=' + encodeURIComponent(id));
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || '读取失败');
-    alert('【' + (j.employee.name || id) + '】的员工记忆\n\n' + (j.memory || '（空）'));
-  } catch (e) { alert('读取失败：' + e.message); }
-}
 async function empPromote(memberId) {
   if (!confirm('把这个成员转为「员工」？\n\n会从他的看板事实（完成的任务 / 交付物 / 决策）提炼一份记忆，' +
                '以后进别的项目时会带着这份记忆。')) return;
@@ -3557,26 +3538,387 @@ async function empPromote(memberId) {
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || j.message || '失败');
     const emp = j.employee || {};
-    alert('已转为员工：' + (emp.name || memberId) + '\n记忆 ' + fmtBytes(emp.memory_bytes || 0));
+    alert('已转为员工：' + (emp.name || memberId) + '\n记忆 ' + fmtBytes(emp.memory_bytes || 0)
+          + '\n\n左侧栏「公司员工」里可以看到他。');
     await loadBoard();
     const modal = document.getElementById('personModal');
     if (modal && modal.classList.contains('show')) openPerson(memberId);
   } catch (e) { alert('转员工失败：' + e.message); }
 }
-async function empAssign(empId) {
-  if (!PROJECT) { alert('先选定一个项目'); return; }
-  if (!confirm('把这个员工指派到「' + PROJECT + '」？\n\n会新建一个终端托管席位，并在身份锚定里带上他的员工记忆。')) return;
+/* ===== v2.20.37：公司视图（员工的跨项目组织） =====
+   层级由「谁向谁汇报」表达；部门是扁平标签，一人一个；没有汇报关系就平铺卡片。 */
+let companyData = { name: '我的公司', departments: [] };
+let companyEmps = [];
+
+function gotoCompany() { location.href = 'org_chart.html?view=company'; }
+function gotoProject(name) { location.href = 'org_chart.html?project=' + encodeURIComponent(name); }
+
+async function refreshCompanyCount() {
   try {
-    const r = await fetch('/api/employees/assign' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+    const r = await fetch('/api/company');
+    const j = await r.json();
+    const el = document.getElementById('companyCount');
+    if (el) el.textContent = String((j.employees || []).length);
+  } catch (e) {}
+}
+
+async function initCompany() {
+  document.body.classList.add('company-mode');
+  ['btn-board', 'btn-discuss', 'btn-position', 'btn-edit'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  const deptBtn = document.getElementById('btn-depts');
+  if (deptBtn) deptBtn.style.display = '';
+  const entry = document.getElementById('companyEntry');
+  if (entry) entry.classList.add('active');
+  await loadCompany();
+}
+
+async function loadCompany() {
+  const resp = await fetch('/api/company');
+  const j = await resp.json();
+  companyData = j.company || companyData;
+  companyEmps = j.employees || [];
+  const nameEl = document.getElementById('projName');
+  if (nameEl) nameEl.textContent = companyData.name || '我的公司';
+  const meta = document.getElementById('projMeta');
+  if (meta) meta.textContent = '正式员工 ' + companyEmps.length + ' · 部门 ' + (companyData.departments || []).length;
+  const cnt = document.getElementById('companyCount');
+  if (cnt) cnt.textContent = String(companyEmps.length);
+  renderCompany();
+}
+
+function companyDeptName(id) {
+  const d = (companyData.departments || []).filter(function (x) { return x.id === id; })[0];
+  return d ? d.name : '';
+}
+
+function companyTree() {
+  const byId = {}, children = {}, roots = [];
+  companyEmps.forEach(function (e) { byId[e.id] = e; });
+  companyEmps.forEach(function (e) {
+    const r = e.reports_to && byId[e.reports_to] ? e.reports_to : '';
+    if (r) (children[r] = children[r] || []).push(e);
+    else roots.push(e);
+  });
+  return { byId: byId, children: children, roots: roots };
+}
+
+function companyLevels() {
+  const t = companyTree();
+  const hasTree = companyEmps.some(function (e) { return e.reports_to && t.byId[e.reports_to]; });
+  if (!hasTree) return { levels: [companyEmps.slice()], flat: true };
+  const levels = [], seen = {};
+  let queue = t.roots.map(function (e) { return { e: e, lvl: 0 }; });
+  while (queue.length) {
+    const cur = queue.shift();
+    if (seen[cur.e.id]) continue;
+    seen[cur.e.id] = 1;
+    (levels[cur.lvl] = levels[cur.lvl] || []).push(cur.e);
+    (t.children[cur.e.id] || []).forEach(function (c) { queue.push({ e: c, lvl: cur.lvl + 1 }); });
+  }
+  companyEmps.forEach(function (e) { if (!seen[e.id]) (levels[0] = levels[0] || []).push(e); });
+  return { levels: levels.filter(Boolean), flat: false };
+}
+
+function companyPos(id, x, y) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('agentnexus_pos_' + COMPANY_KEY + '_' + id));
+    if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') return { x: saved.x, y: saved.y };
+  } catch (e) {}
+  return { x: x, y: y };
+}
+
+function companyNodeHtml(e, x, y) {
+  const dept = companyDeptName(e.department_id);
+  const color = colorForAgent(e.id);
+  const nproj = (e.projects || []).length;
+  return '<div class="node" id="node-' + esc(e.id) + '" data-id="' + esc(e.id) + '"' +
+    ' onclick="companyOpenEmp(\'' + esc(e.id) + '\')" style="left:' + x + 'px;top:' + y + 'px;">' +
+    '<div class="node-head"><div class="badge" style="background:' + color + ';">' + esc(badgeText(e.name || e.id)) + '</div>' +
+    '<div><div class="node-name">' + esc(e.name || e.id) + '</div>' +
+    '<div class="node-role">' + esc(e.role || '未设定身份') + '</div></div></div>' +
+    '<div class="node-status">' +
+    (dept ? '<span class="dept-badge">' + esc(dept) + '</span>'
+          : '<span class="dept-badge" style="opacity:.55;">未分部门</span>') +
+    '<span style="color:var(--dim-2);">' + nproj + ' 项目 · ' + fmtBytes(e.memory_bytes || 0) + '</span>' +
+    '</div></div>';
+}
+
+function renderCompany() {
+  const layer = document.getElementById('nodeLayer');
+  const svg = document.getElementById('orgCanvas');
+  if (!layer || !svg) return;
+  const W = 320, H = 150, PAD = 40, GAP = 30, LGAP = 110;
+  const plan = companyLevels();
+  let html = '', totalW = 900, totalH = 600;
+  nodePos = {};
+  window.orderCache = [];
+  if (plan.flat) {
+    const list = companyEmps;
+    const cols = Math.max(1, Math.min(4, list.length || 1));
+    const rows = Math.ceil((list.length || 1) / cols);
+    totalW = PAD * 2 + cols * W + (cols - 1) * GAP;
+    totalH = 70 + rows * H + (rows - 1) * GAP + 60;
+    list.forEach(function (e, i) {
+      const p = companyPos(e.id, PAD + (i % cols) * (W + GAP), 70 + Math.floor(i / cols) * (H + GAP));
+      nodePos[e.id] = { x: p.x, y: p.y, w: W, h: H, level: 0 };
+      window.orderCache.push(e);
+      html += companyNodeHtml(e, p.x, p.y);
+    });
+  } else {
+    const levels = plan.levels;
+    const maxW = Math.max.apply(null, levels.map(function (l) { return l.length; }).concat([1]));
+    totalW = PAD * 2 + (levels.length - 1) * (W + LGAP) + W;
+    totalH = 70 + maxW * H + (maxW - 1) * GAP + 60;
+    levels.forEach(function (list, li) {
+      const colH = list.length * H + (list.length - 1) * GAP;
+      const baseY = Math.max(70, (totalH - colH) / 2);
+      list.forEach(function (e, i) {
+        const p = companyPos(e.id, PAD + li * (W + LGAP), baseY + i * (H + GAP));
+        nodePos[e.id] = { x: p.x, y: p.y, w: W, h: H, level: li };
+        window.orderCache.push(e);
+        html += companyNodeHtml(e, p.x, p.y);
+      });
+    });
+  }
+  layer.style.width = totalW + 'px';
+  layer.style.height = totalH + 'px';
+  svg.setAttribute('width', totalW);
+  svg.setAttribute('height', totalH);
+  lastTotalW = totalW;
+  lastTotalH = totalH;
+  applyZoom();
+  layer.innerHTML = html;
+  const empty = document.getElementById('emptyState');
+  if (empty) {
+    empty.style.display = companyEmps.length ? 'none' : 'block';
+    if (!companyEmps.length) {
+      empty.innerHTML = '<div class="big">公司还没有员工</div>去项目里打开一个成员卡，点「转为员工」<br>他们就会出现在这里';
+    }
+  }
+  enableCompanyDrag();
+  renderCompanyLines();
+}
+
+function renderCompanyLines() {
+  const svg = document.getElementById('orgCanvas');
+  if (!svg) return;
+  svg.innerHTML = '';
+  const ns = 'http://www.w3.org/2000/svg';
+  companyEmps.forEach(function (e) {
+    const parent = e.reports_to ? nodePos[e.reports_to] : null;
+    const me = nodePos[e.id];
+    if (!parent || !me) return;
+    const x1 = parent.x + parent.w, y1 = parent.y + parent.h / 2;
+    const x2 = me.x, y2 = me.y + me.h / 2;
+    const mx = (x1 + x2) / 2;
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', 'M' + x1 + ',' + y1 + ' L' + mx + ',' + y1 + ' L' + mx + ',' + y2 + ' L' + x2 + ',' + y2);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'var(--dim-2)');
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('opacity', '0.65');
+    svg.appendChild(path);
+  });
+}
+
+function enableCompanyDrag() {
+  document.querySelectorAll('.node').forEach(function (el) {
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false;
+    el.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      dragging = true; moved = false;
+      sx = e.clientX; sy = e.clientY;
+      const cs = getComputedStyle(el);
+      ox = parseFloat(cs.left) || 0; oy = parseFloat(cs.top) || 0;
+      try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+      if (!moved) return;
+      el.classList.add('dragging');
+      const z = ZOOM || 1;
+      el.style.left = (ox + dx / z) + 'px';
+      el.style.top = (oy + dy / z) + 'px';
+      const p = nodePos[el.dataset.id];
+      if (p) { p.x = ox + dx / z; p.y = oy + dy / z; }
+      renderCompanyLines();
+    });
+    const end = function () {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      if (moved) {
+        const id = el.dataset.id, p = nodePos[id];
+        if (p) {
+          try { localStorage.setItem('agentnexus_pos_' + COMPANY_KEY + '_' + id, JSON.stringify({ x: p.x, y: p.y })); } catch (err) {}
+          el._suppressClick = true;
+        }
+      }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('click', function (e) {
+      if (el._suppressClick) { e.stopPropagation(); el._suppressClick = false; }
+    }, true);
+  });
+}
+
+async function companyOpenEmp(id) {
+  const emp = companyEmps.filter(function (e) { return e.id === id; })[0];
+  if (!emp) return;
+  let memory = '';
+  try {
+    const r = await fetch('/api/employees?id=' + encodeURIComponent(id));
+    const j = await r.json();
+    if (j.ok) memory = j.memory || '';
+  } catch (e) {}
+  const depts = companyData.departments || [];
+  const others = companyEmps.filter(function (e) { return e.id !== id; });
+  const projs = (emp.projects || []).map(function (p) {
+    return '<span class="emp-meta" style="margin-right:10px;">' + esc(p.project) + (p.to ? '（已退出）' : '') + '</span>';
+  }).join('') || '<span class="emp-meta">—</span>';
+  document.getElementById('personCard').innerHTML =
+    '<div class="modal-head">' +
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<div class="badge" style="background:' + colorForAgent(emp.id) + ';">' + esc(badgeText(emp.name || emp.id)) + '</div>' +
+        '<div><div style="font-size:16px;font-weight:600;">' + esc(emp.name || emp.id) + '</div>' +
+        '<div style="font-size:12px;color:var(--dim);">' + esc(emp.role || '未设定身份') + '</div></div>' +
+      '</div>' +
+      '<button class="modal-close" onclick="closePerson()">✕</button>' +
+    '</div>' +
+    '<div class="person-body"><div class="person-right" style="flex:1;">' +
+      '<div class="modal-sec-title">公司归属</div>' +
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">' +
+        '<label class="emp-meta">部门</label>' +
+        '<select id="empDeptSel"><option value="">（未分部门）</option>' +
+        depts.map(function (d) {
+          return '<option value="' + esc(d.id) + '"' + (emp.department_id === d.id ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+        }).join('') +
+        '</select>' +
+        '<label class="emp-meta">汇报给</label>' +
+        '<select id="empRepSel"><option value="">（无 / 顶层）</option>' +
+        others.map(function (o) {
+          return '<option value="' + esc(o.id) + '"' + (emp.reports_to === o.id ? ' selected' : '') + '>' + esc(o.name || o.id) + '</option>';
+        }).join('') +
+        '</select>' +
+        '<button class="btn mini" onclick="companySaveEmp(\'' + esc(emp.id) + '\')">保存</button>' +
+      '</div>' +
+      '<div class="modal-sec-title">项目履历</div>' +
+      '<div style="margin-bottom:16px;">' + projs + '</div>' +
+      '<div class="modal-sec-title">员工记忆 · ' + fmtBytes(memory.length) + '</div>' +
+      '<pre class="emp-mem-full">' + esc(memory || '（空）') + '</pre>' +
+      '<div class="modal-sec-title" style="margin-top:16px;">带着经验进项目</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+        '<select id="empAssignSel"><option value="">选一个项目…</option></select>' +
+        '<button class="btn mini" onclick="companyAssign(\'' + esc(emp.id) + '\')">指派</button>' +
+      '</div>' +
+    '</div></div>';
+  document.getElementById('personModal').classList.add('show');
+  try {
+    const r = await fetch('/api/projects');
+    const j = await r.json();
+    const sel = document.getElementById('empAssignSel');
+    if (sel) {
+      sel.innerHTML = '<option value="">选一个项目…</option>' + (j.projects || []).map(function (p) {
+        const nm = p.name || p.project_name || '';
+        return '<option value="' + esc(nm) + '">' + esc(nm) + '</option>';
+      }).join('');
+    }
+  } catch (e) {}
+}
+
+async function companySaveEmp(id) {
+  const dept = document.getElementById('empDeptSel').value;
+  const rep = document.getElementById('empRepSel').value;
+  try {
+    const r = await fetch('/api/company/employee', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: PROJECT, employee_id: empId })
+      body: JSON.stringify({ employee_id: id, department_id: dept, reports_to: rep })
     });
     const j = await r.json();
-    if (!j.ok) throw new Error(j.error || j.message || '失败');
+    if (!j.ok) throw new Error(j.error || j.message || '保存失败');
+    closePerson();
+    await loadCompany();
+  } catch (e) { alert('保存失败：' + e.message); }
+}
+
+async function companyAssign(id) {
+  const proj = document.getElementById('empAssignSel').value;
+  if (!proj) { alert('先选一个项目'); return; }
+  try {
+    const r = await fetch('/api/employees/assign', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: proj, employee_id: id })
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || j.message || '指派失败');
     alert(j.message || '已指派');
-    await loadBoard();
-    await loadEmpList();
+    closePerson();
+    await loadCompany();
   } catch (e) { alert('指派失败：' + e.message); }
+}
+
+/* ===== 部门管理（扁平标签） ===== */
+function openDeptMgr() {
+  document.getElementById('deptModal').classList.add('show');
+  renderDeptMgr();
+}
+function closeDeptMgr() { document.getElementById('deptModal').classList.remove('show'); }
+function renderDeptMgr() {
+  const box = document.getElementById('deptList');
+  if (!box) return;
+  const depts = companyData.departments || [];
+  if (!depts.length) {
+    box.innerHTML = '<div class="work-empty">还没有部门。部门是扁平标签，用来给员工分组。</div>';
+    return;
+  }
+  box.innerHTML = depts.map(function (d) {
+    const n = companyEmps.filter(function (e) { return e.department_id === d.id; }).length;
+    return '<div class="emp-item"><div class="emp-head">' +
+      '<input class="dept-name-input" data-id="' + esc(d.id) + '" value="' + esc(d.name) + '" maxlength="20" style="flex:1;">' +
+      '<span class="emp-meta">' + n + ' 人</span>' +
+      '<button class="btn mini" onclick="renameDept(\'' + esc(d.id) + '\', this.parentNode.querySelector(\'input\').value)">改名</button>' +
+      '<button class="btn mini danger" onclick="delDept(\'' + esc(d.id) + '\')">删除</button>' +
+      '</div></div>';
+  }).join('');
+}
+async function saveDepts(depts) {
+  const r = await fetch('/api/company', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ departments: depts })
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || '保存失败');
+  companyData = j.company || companyData;
+  await loadCompany();
+  renderDeptMgr();
+}
+async function addDept() {
+  const inp = document.getElementById('deptNewName');
+  const name = (inp.value || '').trim();
+  if (!name) return;
+  const depts = (companyData.departments || []).map(function (d) { return { id: d.id, name: d.name }; });
+  depts.push({ id: '', name: name });
+  try { await saveDepts(depts); inp.value = ''; } catch (e) { alert(e.message); }
+}
+async function renameDept(id, name) {
+  const nm = (name || '').trim();
+  if (!nm) return;
+  const depts = (companyData.departments || []).map(function (d) {
+    return { id: d.id, name: d.id === id ? nm : d.name };
+  });
+  try { await saveDepts(depts); } catch (e) { alert(e.message); }
+}
+async function delDept(id) {
+  if (!confirm('删除这个部门？员工会被标为「未分部门」，档案不受影响。')) return;
+  const depts = (companyData.departments || []).filter(function (d) { return d.id !== id; })
+    .map(function (d) { return { id: d.id, name: d.name }; });
+  try { await saveDepts(depts); } catch (e) { alert(e.message); }
 }
 
 /* ===== 绑定 ===== */
@@ -3589,7 +3931,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.36';
+const BUILD_VERSION = 'v2.20.37';
 let dshPageStamp = '';
 function showBuildTag() {
   try {
@@ -3623,13 +3965,19 @@ async function checkPageFreshness() {
 
 (async function main() {
   try {
-    await loadBoard();
+    if (VIEW === 'company') await initCompany();
+    else await loadBoard();
     loadProjects();
+    refreshCompanyCount();
     showBuildTag();
     checkPageFreshness();
     setInterval(checkPageFreshness, 60000);
-    // 自动刷新：30s 轮询（同看板节奏）
-    setInterval(async () => { try { await loadBoard(); } catch (e) {} }, 30000);
+    if (VIEW === 'company') {
+      setInterval(async () => { try { await loadCompany(); } catch (e) {} }, 30000);
+    } else {
+      // 自动刷新：30s 轮询（同看板节奏）
+      setInterval(async () => { try { await loadBoard(); } catch (e) {} }, 30000);
+    }
   } catch (e) {
     console.error('组织视图加载失败:', e);
     document.getElementById('emptyState').style.display = 'block';

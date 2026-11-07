@@ -194,22 +194,28 @@ try:
         ok(needle in src, label)
 
     html = open(os.path.join(REPO_ROOT, "org_chart.html"), encoding="utf-8").read()
-    print("\n== I. 前端（员工库 + 转员工入口）==")
+    print("\n== I. 前端（侧栏公司入口 + 转员工）==")
     for needle, label in [
-        ('id="btn-employees"', "顶栏有「员工」入口"),
-        ('onclick="openEmp()"', "入口打开员工库"),
-        ('id="empModal"', "员工库弹窗存在"),
-        ('id="empList"', "列表容器存在"),
-        ("async function loadEmpList()", "有加载列表函数"),
-        ("async function empPromote(memberId)", "有转员工函数"),
-        ("async function empAssign(empId)", "有指派函数"),
+        ('id="companyEntry"', "侧栏有「公司员工」入口"),
+        ('onclick="gotoCompany()"', "入口切到公司视图"),
+        ("const VIEW = params.get('view')", "识别 view=company"),
+        ("async function initCompany()", "有公司视图初始化"),
+        ("function renderCompany()", "有公司组织图渲染"),
+        ("function renderCompanyLines()", "有汇报线绘制"),
+        ("function renderDeptMgr()", "有部门管理"),
+        ("async function companySaveEmp(", "能设置部门/汇报对象"),
+        ("async function companyAssign(", "能从公司视图指派进项目"),
+        ("/api/company/employee", "部门/汇报走后台接口"),
+        ("async function empPromote(memberId)", "成员卡仍能转员工"),
         ("/api/employees/promote", "转员工走后台接口"),
-        ("/api/employees/assign", "指派走后台接口"),
-        ("await loadBoard();", "转员工后刷新看板（徽标出现）"),
-        ('employee_id', "成员卡认识员工标记"),
+        ('await loadBoard();', "转员工后刷新看板（徽标出现）"),
         ('.emp-badge', "员工徽标样式"),
+        ('id="btn-employees"', "顶栏旧入口已移除"),
     ]:
-        ok(needle in html, label)
+        if label == "顶栏旧入口已移除":
+            ok(needle not in html, label)
+        else:
+            ok(needle in html, label)
 finally:
     for k, v in orig.items():
         setattr(S, k, v)

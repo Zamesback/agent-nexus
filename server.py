@@ -4404,6 +4404,195 @@ def _dsh_employee_memory_block(member):
             % (rec.get("name") or eid, rec.get("role") or "", clip))
 
 
+# ===== v2.20.37：公司视图（员工的跨项目组织） =====
+# 设计：层级由「谁向谁汇报」表达（reports_to）；部门是扁平标签，一人一个，不嵌套；
+# 部门负责人不设字段——谁在链顶端就是谁。
+COMPANY_FILENAME = "company.json"
+COMPANY_MAX_DEPTS = 60
+
+
+def _company_path():
+    return os.path.join(PROJECTS_ROOT, ".agentnexus", COMPANY_FILENAME)
+
+
+def _company_load():
+    try:
+        with open(_company_path(), "r", encoding="utf-8") as fh:
+            obj = json.load(fh)
+        if not isinstance(obj, dict):
+            obj = {}
+    except Exception:
+        obj = {}
+    depts = obj.get("departments")
+    if not isinstance(depts, list):
+        depts = []
+    clean = []
+    for d in depts[:COMPANY_MAX_DEPTS]:
+        if not isinstance(d, dict):
+            continue
+        did = str(d.get("id") or "").strip()
+        name = str(d.get("name") or "").strip()
+        if not did or not name:
+            continue
+        clean.append({"id": did, "name": name[:20], "order": int(d.get("order") or len(clean) + 1)})
+    return {"name": str(obj.get("name") or "我的公司")[:40], "departments": clean}
+
+
+def _company_save(obj):
+    try:
+        os.makedirs(os.path.dirname(_company_path()), exist_ok=True)
+        p = _company_path()
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, p)
+        return True
+    except Exception as e:
+        _dsh_log("公司配置写入失败: %s" % e)
+        return False
+
+
+def _company_dept_ids():
+    return {d["id"] for d in _company_load().get("departments") or []}
+
+
+def _company_normalize_departments(raw):
+    """校验并规范化部门列表（前端整表提交）。返回 (depts, error)"""
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list):
+        return [], "departments 必须是数组"
+    if len(raw) > COMPANY_MAX_DEPTS:
+        return [], "部门过多（上限 %d 个）" % COMPANY_MAX_DEPTS
+    out, seen = [], set()
+    used = set()
+    for i, d in enumerate(raw):
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name") or "").strip()
+        if not name:
+            continue
+        did = str(d.get("id") or "").strip()
+        if not did or did in used:
+            n = len(out) + 1
+            while ("dept-%d" % n) in used:
+                n += 1
+            did = "dept-%d" % n
+        used.add(did)
+        out.append({"id": did, "name": name[:20], "order": i + 1})
+    return out, None
+
+
+def _company_reports_cycle(employee_id, reports_to):
+    """把 reports_to 设给 employee_id 会不会成环（沿汇报链往上走）"""
+    seen = set()
+    cur = reports_to
+    while cur:
+        if cur == employee_id:
+            return True
+        if cur in seen:
+            return True            # 已有环，保守拒绝
+        seen.add(cur)
+        rec = _emp_load(cur) or {}
+        cur = str(rec.get("reports_to") or "")
+    return False
+
+
+def _company_update_employee(employee_id, department_id=None, reports_to=None):
+    rec = _emp_load(employee_id)
+    if not rec:
+        return False, "员工不存在"
+    if department_id is not None:
+        department_id = str(department_id or "").strip()
+        if department_id and department_id not in _company_dept_ids():
+            return False, "部门不存在：%s" % department_id
+        if rec.get("department_id") != department_id:
+            if department_id:
+                rec["department_id"] = department_id
+            else:
+                rec.pop("department_id", None)
+    if reports_to is not None:
+        reports_to = str(reports_to or "").strip()
+        if reports_to:
+            if reports_to == employee_id:
+                return False, "不能汇报给自己"
+            if not _emp_load(reports_to):
+                return False, "汇报对象不是员工：%s" % reports_to
+            if _company_reports_cycle(employee_id, reports_to):
+                return False, "汇报关系会成环（%s 已经在你下面）" % reports_to
+            rec["reports_to"] = reports_to
+        else:
+            rec.pop("reports_to", None)
+    rec["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if not _emp_save(rec):
+        return False, "员工档案写入失败"
+    return True, "已保存"
+
+
+def _handle_company(self, project=None):
+    """GET  → {company, employees}；POST → 更新公司名 / 部门整表"""
+    if self.command == "GET":
+        company = _company_load()
+        emps = []
+        for rec in _emp_list():
+            emps.append({
+                "id": rec.get("id"),
+                "name": rec.get("name"),
+                "role": rec.get("role"),
+                "department_id": rec.get("department_id") or "",
+                "reports_to": rec.get("reports_to") or "",
+                "projects": rec.get("projects") or [],
+                "clones": rec.get("clones") or [],
+                "parent": rec.get("parent"),
+                "memory_bytes": len(_emp_read_memory(rec.get("id")).encode("utf-8")),
+            })
+        self._send_json({"ok": True, "company": company, "employees": emps})
+        return
+    req = _emp_read_json_body(self)
+    company = _company_load()
+    if "name" in req:
+        name = str(req.get("name") or "").strip()
+        if name:
+            company["name"] = name[:40]
+    if "departments" in req:
+        depts, err = _company_normalize_departments(req.get("departments"))
+        if err:
+            self._send_json({"ok": False, "error": err}, status=400)
+            return
+        company["departments"] = depts
+        # 被删掉的部门：顺手把员工身上悬空的 department_id 清掉
+        valid = {d["id"] for d in depts}
+        for rec in _emp_list():
+            did = rec.get("department_id")
+            if did and did not in valid:
+                rec.pop("department_id", None)
+                _emp_save(rec)
+    if not _company_save(company):
+        self._send_json({"ok": False, "error": "公司配置写入失败"}, status=500)
+        return
+    self._send_json({"ok": True, "company": company})
+
+
+def _handle_company_employee(self, project=None):
+    """POST {employee_id, department_id?, reports_to?}：设置部门 / 汇报对象"""
+    req = _emp_read_json_body(self)
+    eid = str(req.get("employee_id") or req.get("employee") or "").strip()
+    if not eid:
+        self._send_json({"ok": False, "error": "缺少 employee_id"}, status=400)
+        return
+    has_dept = "department_id" in req
+    has_rep = "reports_to" in req
+    if not has_dept and not has_rep:
+        self._send_json({"ok": False, "error": "没有要更新的字段"}, status=400)
+        return
+    ok, msg = _company_update_employee(
+        eid,
+        department_id=req.get("department_id") if has_dept else None,
+        reports_to=req.get("reports_to") if has_rep else None,
+    )
+    self._send_json({"ok": ok, "message": msg}, status=200 if ok else 400)
+
+
 # ===== v2.20.32：用户叫停 =====
 # 为什么需要：一轮可能跑 30 分钟，以前除了等没有别的办法（watchdog 只处理「没动静」，
 # 预算上限是兜底）。用户要的是「立刻别干了」——所以这里记住正在跑的进程句柄，
@@ -5730,6 +5919,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
             _handle_dsh_model(self, project)
             return
 
+        # API: 公司视图（v2.20.37）
+        if parsed.path == "/api/company":
+            _handle_company(self, project)
+            return
+
         # API: 员工（跨项目记忆，v2.20.35）
         if parsed.path == "/api/employees":
             _handle_employees(self, project)
@@ -5893,6 +6087,14 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 会话清空（v2.17）
         if parsed.path == "/api/dsh/history/clear":
             _handle_dsh_history_clear(self, project)
+            return
+
+        # API: 公司视图（v2.20.37）
+        if parsed.path == "/api/company":
+            _handle_company(self, project)
+            return
+        if parsed.path == "/api/company/employee":
+            _handle_company_employee(self, project)
             return
 
         # API: 员工（跨项目记忆，v2.20.35）

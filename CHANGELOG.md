@@ -1,3 +1,38 @@
+## v2.20.37 — A company view for the people who outgrew a project
+
+Zames: "the 员工 button crowds the top bar — put it on the left, under the projects, and make it a
+company org chart, not a modal. Departments like 设计部 / 技术部, user-defined." Then, on hierarchy:
+"does a department need levels? The org chart already arranges people — one person has people under
+them, who have people under them."
+
+So hierarchy moved back where it belongs: the people. A department is a **flat tag**, one per employee,
+with no nesting and no "leader" field — whoever sits at the top of a chain of reporting lines is the head,
+and the chart shows it. Departments exist to group and label, not to add a second tree competing with the
+first.
+
+**Data** — `<projects-root>/.agentnexus/company.json`: `{name, departments:[{id,name,order}]}`, plus two
+fields on the employee record: `department_id` (one, or none) and `reports_to` (another employee, or none).
+
+**Server** — `GET/POST /api/company` (read everything; write the company name and the whole department
+list) and `POST /api/company/employee` (set department and/or reporting line). Validation: departments
+must exist, an employee cannot report to itself, and a reporting cycle is refused by walking the chain.
+Deleting a department clears the now-dangling `department_id` from every employee rather than leaving a
+reference to nothing.
+
+**View** — the 员工 button left the header and became 「公司员工」 under the project list; it opens
+`org_chart.html?view=company`, which reuses the same canvas (pan, zoom, drag, layout) but renders
+employees instead of project members. With reporting lines it draws the tree; without any, it lays the
+cards out flat. Each card carries its department badge, project count and memory size. Clicking one opens
+a company card: department and "reports to" selectors, project history, the memory itself, and an
+"assign into a project" picker. A 部门 button manages the flat department list. Node positions persist per
+browser, as on the project chart. The old employee-library modal is gone rather than left unreachable.
+
+Tests: `tests/t29_company_test.py` 36/36 — defaults, department normalisation (ids, duplicates, empty
+names, cap), department existence, self-reporting and cycle refusal, clearing, dangling-reference
+cleanup through the real handler, and the GET payload. `tests/t27_employees_test.py` grew to 56/56 for the
+new wiring (sidebar entry, view switch, department manager, promote still on the member card, old header
+button gone). Full regression green: 28 files, 1067 assertions.
+
 ## v2.20.36 — Two old buttons were lying
 
 Zames, on the existing features: "the deliverables are under the reply now, but clicking one previews
