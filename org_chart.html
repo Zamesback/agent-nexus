@@ -616,6 +616,14 @@
   .dsh-att-chip .x { cursor: pointer; color: var(--dim-2); font-weight: 700; }
   .dsh-att-chip .x:hover { color: #f85149; }
   .person-right.dragover { outline: 2px dashed var(--accent); outline-offset: -6px; }
+  /* v2.20.36：附件在页内预览（新窗口打开经常是一片空白） */
+  .modal.att-preview { width: 1100px; max-width: 94vw; height: 82vh; display: flex; flex-direction: column; }
+  .att-preview .att-title { font-size: 13px; font-family: var(--mono); overflow: hidden;
+                            text-overflow: ellipsis; white-space: nowrap; }
+  .att-preview .att-body { flex: 1; min-height: 0; background: #111; border-radius: 8px;
+                           overflow: hidden; margin-top: 8px; border: 1px solid var(--line); }
+  .att-preview .att-body iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+  .att-preview .att-hint { font-size: 11px; color: var(--dim-2); margin-top: 6px; font-family: var(--mono); }
   /* v2.20.35：员工（跨项目记忆） */
   .emp-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
                font-family: var(--mono); color: var(--accent); border: 1px solid var(--line);
@@ -705,6 +713,20 @@
   </div>
 
   <!-- 加位子弹窗 -->
+  <div class="modal-mask" id="attModal" onclick="if(event.target===this)dshCloseAtt()">
+    <div class="modal att-preview">
+      <div class="modal-head">
+        <div class="att-title" id="attTitle">预览</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a id="attOpenNew" class="btn mini" target="_blank" rel="noopener">新窗口打开</a>
+          <button class="modal-close" onclick="dshCloseAtt()">✕</button>
+        </div>
+      </div>
+      <div class="att-body"><iframe id="attFrame" referrerpolicy="no-referrer"></iframe></div>
+      <div class="att-hint">空白 / 报错：文件可能已被移动或删除，或不在允许预览的目录内。</div>
+    </div>
+  </div>
+
   <div class="modal-mask" id="empModal" onclick="if(event.target===this)closeEmp()">
     <div class="modal" style="width:680px;">
       <div class="modal-head">
@@ -2336,6 +2358,26 @@ function dshAttUrl(agentId, p, download) {
          '&agent=' + encodeURIComponent(agentId || '') + '&path=' + encodeURIComponent(p || '') +
          (download ? '&download=1' : '');
 }
+// v2.20.36：附件页内预览。以前点开是新开一个标签页，命中 403 时就是一片空白。
+function dshOpenAtt(url, name) {
+  const modal = document.getElementById('attModal');
+  const frame = document.getElementById('attFrame');
+  if (!modal || !frame) { window.open(url, '_blank'); return false; }
+  const title = document.getElementById('attTitle');
+  const openNew = document.getElementById('attOpenNew');
+  if (title) title.textContent = name || '预览';
+  if (openNew) openNew.href = url;
+  frame.src = url;
+  modal.classList.add('show');
+  return false;
+}
+function dshCloseAtt() {
+  const modal = document.getElementById('attModal');
+  const frame = document.getElementById('attFrame');
+  if (frame) frame.src = 'about:blank';
+  if (modal) modal.classList.remove('show');
+}
+
 function dshAttachHtml(items, agentId) {
   const list = (items || []).filter(function (x) { return x && x.path; });
   if (!list.length) return '';
@@ -2345,11 +2387,13 @@ function dshAttachHtml(items, agentId) {
     const url = dshAttUrl(agentId, a.path, false);
     const nm = esc2(name);
     if (DSH_ATT_IMG[ext]) {
-      return '<a class="dsh-att img" href="' + url + '" target="_blank" rel="noopener" title="' + nm + '">' +
+      return '<a class="dsh-att img" href="' + url + '" data-name="' + nm + '" title="' + nm + '"' +
+             ' onclick="dshOpenAtt(this.href, this.dataset.name); return false;">' +
              '<img src="' + url + '" alt="' + nm + '" loading="lazy">' +
              '<span class="att-name">' + nm + '</span></a>';
     }
-    return '<a class="dsh-att" href="' + url + '" target="_blank" rel="noopener" title="' + nm + '">' +
+    return '<a class="dsh-att" href="' + url + '" data-name="' + nm + '" title="' + nm + '"' +
+           ' onclick="dshOpenAtt(this.href, this.dataset.name); return false;">' +
            '📄 <span class="att-name">' + nm + '</span>' +
            '<span class="att-size">' + fmtBytes(a.size) + '</span></a>';
   });
@@ -3545,7 +3589,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.35';
+const BUILD_VERSION = 'v2.20.36';
 let dshPageStamp = '';
 function showBuildTag() {
   try {

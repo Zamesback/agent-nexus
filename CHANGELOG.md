@@ -1,3 +1,30 @@
+## v2.20.36 — Two old buttons were lying
+
+Zames, on the existing features: "the deliverables are under the reply now, but clicking one previews
+nothing — it opens a new page that stays blank", and "in 三国指挥官 I try to remove some members and they
+never go away, the button is there".
+
+**Removing a member (or renaming one) killed the request.** Both paths append a system message and used
+`max([m.get("id", 0) for m in messages])` to pick the next id. This board contains twelve string ids and
+three `None` ids (agents have edited it by hand), so `max()` compared `str` with `int`, raised
+`TypeError`, and the handler died before writing a response — the client saw a reset connection, its
+`await resp.json()` threw, no alert appeared, and the card stayed. `_next_message_id()` now takes only
+ids that convert to `int`, so mixed junk cannot break the request again. Reproduced live before the fix
+(`http=000`, 9 ms) and after it (system message written, member gone).
+
+**Attachments opened a blank tab.** The preview endpoint only serves paths in the member's artifact
+registry — an intentional safety rule — but the files that started appearing under replies (v2.20.34) come
+from the turn-window sweep and were never registered, so every one of them answered 403. The sweep now
+records what it finds (`tool: 生成`), and the card previews in place: clicking an attachment opens an
+iframe modal (`新窗口打开` stays as a fallback) instead of a new tab that could only show JSON.
+
+Tests: `tests/t28_fixes_test.py` 19/19 — re-creates the crash with mixed ids first (asserting the old
+`max()` throws), then the helper against mixed/empty/string-only/junk boards, both call sites, the sweep
+registration, and the preview wiring. Verified red first by restoring the naive `max`. Full regression
+green: 27 files, 1028 assertions — T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49, T12 30, T13 37,
+T14 114, T15 64, T16 40, T17 35, T18 41, T19 25, T20 61, T21 55 + 17, T22 45, T23 48 + 16, T24 37 + 13,
+T25 14, T26 23, T27 53, T28 19.
+
 ## v2.20.35 — Employees: a seat becomes a person with a memory
 
 Zames: "in a project someone does well — let me turn them into an employee. If a new project needs

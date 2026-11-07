@@ -1054,7 +1054,7 @@ def update_agent_profile(project, agent_id, name=None, role=None):
     if changed:
         now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
         board.setdefault("messages", []).append({
-            "id": max([m.get("id", 0) for m in board.get("messages", [])], default=0) + 1,
+            "id": _next_message_id(board),
             "sender": "system",
             "content": f"成员 {agent_id} {'；'.join(changed)}（身份 ID 不变，已派任务不受影响）",
             "timestamp": now,
@@ -1092,6 +1092,26 @@ def update_agent_profile(project, agent_id, name=None, role=None):
     return True, "已更新", {"changed": changed, "guide": guide, "is_guide": is_guide}
 
 
+def _next_message_id(board):
+    """下一条看板消息 id：只取能转成 int 的历史 id。
+
+    v2.20.36 事故：看板里混进了 12 个字符串 id 和 3 个 None id，
+    而旧代码用 max([m.get("id", 0) ...]) 直接比较——str 与 int 混比较抛 TypeError，
+    整个请求处理器崩掉、连接被重置，前端只看到「点了没反应」。
+    """
+    best = 0
+    for m in (board.get("messages") or []):
+        if not isinstance(m, dict):
+            continue
+        try:
+            v = int(m.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if v > best:
+            best = v
+    return best + 1
+
+
 def remove_agent(project, agent_id):
     """v2.12: 移除成员——从看板/config 删除；名下未完成任务转为无人认领；引用它的汇报关系清空"""
     if not agent_id or agent_id == "user":
@@ -1116,7 +1136,7 @@ def remove_agent(project, agent_id):
     board["agents"] = [a for a in board.get("agents", []) if a.get("id") != agent_id]
     # 系统消息
     board.setdefault("messages", []).append({
-        "id": max([m.get("id", 0) for m in board.get("messages", [])], default=0) + 1,
+        "id": _next_message_id(board),
         "sender": "system",
         "content": f"成员 {agent_id} 已从班子移除" + (f"，{orphan} 个未完成任务已转为无人认领" if orphan else ""),
         "timestamp": now,
@@ -3756,6 +3776,13 @@ def _dsh_turn_attachments(project, agent_id, since, since_epoch=None):
                 "path": f["path"], "tool": "生成", "size": f["size"],
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(f["mtime"])),
             })
+        # v2.20.36：扫描到的文件也要进交付物登记，否则预览接口只放行登记过的 → 点开是 403
+        try:
+            scanned = [a["path"] for a in out if a.get("tool") == "生成"]
+            if scanned:
+                _dsh_artifact_record(project, agent_id, "生成", scanned)
+        except Exception as e:
+            _dsh_log("扫描产出登记失败（不影响附件展示）: %s" % e)
     return out
 
 
