@@ -54,10 +54,10 @@ include(server, 'os.path.basename(str(name or "").replace("\\\\", "/"))', '只�
 include(server, '"is_image": ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif")', '回传是否图片')
 
 section('\n== B. 服务端：本轮交付物挂到回复上 ==')
-include(server, 'def _dsh_turn_attachments(project, agent_id, since):', '有「本轮附件」计算')
+include(server, 'def _dsh_turn_attachments(project, agent_id, since', '有「本轮附件」计算')
 include(server, 'if not ts or ts < since:', '按本轮时间窗过滤旧交付物')
-include(server, '"attachments": _dsh_turn_attachments(project, agent_id, _turn_since)', 'final 实时落盘时带上附件')
-include(server, '"attachments": _dsh_turn_attachments(project, agent_id, _turn_since)}', 'dsh_done 事件带上附件（前端可立即画）')
+include(server, '"attachments": _dsh_turn_attachments(project, agent_id, _turn_since, _turn_since_epoch)', 'final 实时落盘时带上附件')
+include(server, '"attachments": _dsh_turn_attachments(project, agent_id, _turn_since, _turn_since_epoch)})', 'dsh_done 事件带上附件（前端可立即画）')
 include(server, '_turn_since = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 1))', '时间窗从本轮开始前 1 秒算（避开同秒边界）')
 
 section('\n== C. 前端：回复下面挂附件 ==')

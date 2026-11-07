@@ -1,3 +1,27 @@
+## v2.20.34 — Deliverables show up even when a script made them
+
+Zames: "the deliverables under the reply — I still haven't seen it." The pipeline was fine; the data
+was not. The artifact registry holds 146 entries for 三国指挥官 and **zero images**: it only records
+`write` / `edit` / `present`, and the art assets are produced by a node script run through `bash`. So a
+reply could say "here is the new texture" and carry nothing at all.
+
+`_dsh_turn_files()` now sweeps the member's working directory when a turn ends, keeping files whose
+mtime falls inside the turn window and whose extension is deliverable-shaped (images, documents,
+audio/video), pruning `.git`, `node_modules`, `_inbox` and friends, with a stat cap so a large repo
+cannot stall a reply — newest first, at most 8. They are appended after the registry entries and
+de-duplicated by realpath, so nothing doubles and an explicit `write` keeps its provenance. Auto-wake
+replies get the same treatment.
+
+The card also renders the last 60 messages instead of 30: four of the six attachment-bearing replies in
+设计总负责DSH-1's history sat outside the old window, which is part of why the feature looked absent.
+
+Tests: `tests/t26_turn_files_test.py` 23/23 — the time window, the extension filter, pruned
+directories, mtime ordering and the cap, merge/de-dupe with the registry (an explicit `write` keeps its
+tool), and the "no epoch → registry only" fallback. Verified red first by disabling the sweep. Full
+regression green: 25 files, 956 assertions — T5 27, T6 12, T7 22, T8 13, T9 36, T10 82, T11 49, T12 30,
+T13 37, T14 114, T15 64, T16 40, T17 35, T18 41, T19 25, T20 61, T21 55 + 17, T22 45, T23 48 + 16,
+T24 37 + 13, T25 14, T26 23.
+
 ## v2.20.33 — A model the dropdown offered, but the provider never had
 
 Zames switched a hosted member to "DeepSeek V4 Flash Vision" and it stopped answering. The log says

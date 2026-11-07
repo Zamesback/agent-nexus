@@ -2,7 +2,7 @@
 
 > The v2.20 arc is **process hosting**: an agent stops being a prompt you paste and becomes a real
 > local process that the board can wake, watch, and ask *you* for permission before it touches
-> anything. This is the write-up of what landed between v2.20.6 and v2.20.33.
+> anything. This is the write-up of what landed between v2.20.6 and v2.20.34.
 
 ![Org chart](screenshots/05-org-chart.png)
 
@@ -157,6 +157,14 @@ The model picker only offers what the member's provider profile actually configu
 is a *cost* gate, not proof the provider has the model; `_dsh_verify_model` now checks both and refuses
 to start with an explanation naming the models that member does have. If the CLI ever reports
 `UNKNOWN_MODEL`, the card says so immediately instead of spinning until the watchdog.
+
+## 14. Deliverables appear even when a script made them
+
+The artifact registry only sees `write` / `edit` / `present`; art assets are made by scripts run through
+`bash`, which is why a board with 146 recorded artifacts had zero images. A turn now also sweeps its own
+working directory for files changed during that turn — images, documents, audio/video — with noisy
+directories pruned, newest first, at most eight, de-duplicated against the registry. Attachments are
+under the reply, whether the agent wrote the file or a script did.
 
 ## Running it
 

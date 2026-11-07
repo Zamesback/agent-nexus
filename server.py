@@ -2296,6 +2296,9 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
             }])
             box = {"text": "", "persisted": False}
+            # v2.20.34：唤醒的那一轮同样挂产出（美术/文档多半是 bash 生成的）
+            _aw_since = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 1))
+            _aw_since_epoch = time.time() - 1
 
             def emit(ev):
                 t = ev.get("type")
@@ -2307,6 +2310,7 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
                         _dsh_append_history(project, agent_id, [{
                             "role": "assistant", "content": ev["text"],
                             "auto_wake": True,
+                            "attachments": _dsh_turn_attachments(project, agent_id, _aw_since, _aw_since_epoch),
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                         }])
 
@@ -2341,6 +2345,7 @@ def _dsh_auto_wake_worker(project, agent_id, source_msg, reason):
                 _dsh_append_history(project, agent_id, [{
                     "role": "assistant", "content": box["text"],
                     "auto_wake": True,
+                    "attachments": _dsh_turn_attachments(project, agent_id, _aw_since, _aw_since_epoch),
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 }])
             if box["text"]:
@@ -3584,8 +3589,63 @@ def _handle_dsh_upload(self, project=None):
     })
 
 
-def _dsh_turn_attachments(project, agent_id, since):
-    """这一轮 Agent 实际写/改过的文件（交付物登记里 ts >= since 的条目）。
+# v2.20.34：本轮产出扫描——补上 bash 生成的文件。
+# 起因：交付物登记只认 write/edit/present，而美术资产是「bash 跑 node 脚本」生成的，
+# 于是登记表里 146 条、0 张图片——回复下面永远看不到图。这里按「本轮时间窗 + 交付类扩展名」
+# 兜底扫一遍工作目录，不依赖模型自觉用 present。
+DSH_TURN_SCAN_EXT = {
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico",
+    "md", "pdf", "html", "htm", "csv", "xlsx", "docx", "pptx",
+    "mp4", "webm", "mov", "mp3", "wav",
+}
+DSH_TURN_SCAN_PRUNE = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build",
+    "coverage", "_inbox", ".cache", ".idea", ".vscode", "site-packages",
+}
+DSH_TURN_SCAN_VISIT_CAP = 20000     # 防大仓库卡住（只 stat 到这个数就停）
+DSH_TURN_SCAN_MAX_FILES = 8         # 一轮最多挂几个「扫描到的」文件
+
+
+def _dsh_turn_files(project, since_epoch, limit=None):
+    """扫描成员工作目录，找出本轮新产生/修改的交付类文件（图片/文档/音视频）。
+
+    只做兜底，不替代交付物登记：登记过的会被 _dsh_turn_attachments 去重掉。
+    """
+    limit = DSH_TURN_SCAN_MAX_FILES if limit is None else limit
+    if not project or not since_epoch:
+        return []
+    wd = _dsh_run_cwd(project)
+    if not wd or not os.path.isdir(wd):
+        return []
+    found, visited, stop = [], 0, False
+    for root, dirs, files in os.walk(wd):
+        dirs[:] = [d for d in dirs if d not in DSH_TURN_SCAN_PRUNE and not d.startswith(".")]
+        for fn in files:
+            visited += 1
+            if visited > DSH_TURN_SCAN_VISIT_CAP:
+                stop = True
+                break
+            ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+            if ext not in DSH_TURN_SCAN_EXT:
+                continue
+            p = os.path.join(root, fn)
+            try:
+                st = os.stat(p)
+            except Exception:
+                continue
+            if st.st_mtime < since_epoch:
+                continue
+            if st.st_size > DSH_ARTIFACT_MAX_BYTES:
+                continue
+            found.append({"path": p, "size": st.st_size, "mtime": st.st_mtime})
+        if stop:
+            break
+    found.sort(key=lambda x: x["mtime"], reverse=True)
+    return found[:limit]
+
+
+def _dsh_turn_attachments(project, agent_id, since, since_epoch=None):
+    """这一轮 Agent 产出的文件：交付物登记（write/edit/present）+ 工作目录扫描（bash 生成）。
 
     用于把「回复 + 它这一轮产出的图/文件」放在一起：用户要的是像别的 agent 那样，
     文字下面挂着这次交付的附件，而不是让人自己去侧栏翻。
@@ -3611,6 +3671,19 @@ def _dsh_turn_attachments(project, agent_id, since):
             continue
         out.append({"path": ap, "tool": e.get("tool") or "", "ts": ts, "size": size})
     out.sort(key=lambda x: x.get("ts") or "")
+    # v2.20.34：兜底扫描（bash 生成的文件不会进登记表）
+    if since_epoch:
+        for f in _dsh_turn_files(project, since_epoch):
+            try:
+                rp = os.path.realpath(f["path"])
+            except Exception:
+                rp = f["path"]
+            if any(os.path.realpath(a["path"]) == rp for a in out):
+                continue
+            out.append({
+                "path": f["path"], "tool": "生成", "size": f["size"],
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(f["mtime"])),
+            })
     return out
 
 
@@ -4622,6 +4695,7 @@ def _handle_dsh_chat(self, project=None):
     # v2.20.31：这一轮的时间窗（往前放 1 秒避开同秒边界）——用它认出「本轮真正写出来的文件」，
     # 挂到回复下面，和别的 agent 一样「文字 + 附件」。
     _turn_since = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 1))
+    _turn_since_epoch = time.time() - 1   # v2.20.34：扫描用（bash 生成的文件靠它认）
     def emit(ev):
         t = ev.get("type")
         if t in ("text", "final") and ev.get("text"):
@@ -4631,7 +4705,7 @@ def _handle_dsh_chat(self, project=None):
                 _reply_box["persisted"] = True
                 _dsh_append_history(project, agent_id, [{
                     "role": "assistant", "content": ev["text"],
-                    "attachments": _dsh_turn_attachments(project, agent_id, _turn_since),
+                    "attachments": _dsh_turn_attachments(project, agent_id, _turn_since, _turn_since_epoch),
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 }])
         try:
@@ -4716,7 +4790,7 @@ def _handle_dsh_chat(self, project=None):
         _dsh_append_history(project, agent_id, [{
             "role": "assistant", "content": _reply_box["text"],
             "usage": {k: usage.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadTokens", "totalTokens")},
-            "attachments": _dsh_turn_attachments(project, agent_id, _turn_since),
+            "attachments": _dsh_turn_attachments(project, agent_id, _turn_since, _turn_since_epoch),
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")
         }])
     if not ok and not _reply_box["text"]:
@@ -4728,7 +4802,7 @@ def _handle_dsh_chat(self, project=None):
           "stopped": bool(_stopped),   # v2.20.32：这一轮是用户叫停的
           "usage": usage, "total_usage": member_cfg.get("usage", {}),
           # v2.20.31：本轮交付的附件（图片/文件），前端直接挂在回复气泡下面
-          "attachments": _dsh_turn_attachments(project, agent_id, _turn_since)})
+          "attachments": _dsh_turn_attachments(project, agent_id, _turn_since, _turn_since_epoch)})
 
 # ================= 讨论房间 v1（v2.20） =================
 # 主持人点名轮转：每次唤醒携带完整讨论记录 + 「先回应上一位」+ 可选「N 轮后结束」收敛提示。

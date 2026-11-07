@@ -2235,7 +2235,7 @@ async function syncDshHistoryFromServer(agentId) {
     if (who !== currentDshAgent) return;
     const box = document.getElementById('dshMsgs');
     if (!box) return;
-    const h = dshCacheByAgent[who].slice(-30);
+    const h = dshCacheByAgent[who].slice(-60);
     box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content, null, Object.assign({ agent: who }, m))).join('') : '';
     scrollToBottom(box);
   } catch (e) { /* 自愈失败不影响主流程 */ }
@@ -2278,7 +2278,7 @@ async function loadDshHistory() {
       wdEl.textContent = wd ? '📁 ' + (wd.split('/').filter(Boolean).pop() || wd) : '';
       wdEl.title = wd ? '工作目录（也是它的沙箱可写根）：' + wd : '';
     }
-    const h = dshCacheByAgent[who].slice(-30);
+    const h = dshCacheByAgent[who].slice(-60);
     box.innerHTML = h.length ? h.map(m => dshMsgHtml(m.role, m.content, null, Object.assign({ agent: who }, m))).join('') : '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
     scrollToBottom(box);  // v2.20.4：打开卡片时滚动到最近消息
     // v2.20.29：这个成员此刻还有一轮在跑 → 把半截回复和「还在跑」接回来（历史里还没有那条）
@@ -2361,7 +2361,7 @@ function dshSetBody(el, role, content) {
 }
 function renderDshHistory() {
   // v2.17：打开卡片时由 loadDshHistory() 从服务端加载；此函数仅用于同步兜底
-  const h = dshHistory().slice(-30);
+  const h = dshHistory().slice(-60);
   if (!h.length) return '<div class="work-empty" style="padding:10px 0;">还没有对话 —— 直接在下方输入指令，终端 Agent 会实时回复并操作看板。</div>';
   const who = currentDshAgent; return h.map(m => dshMsgHtml(m.role, m.content, null, Object.assign({ agent: who }, m))).join('');
 }
@@ -3441,7 +3441,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.33';
+const BUILD_VERSION = 'v2.20.34';
 let dshPageStamp = '';
 function showBuildTag() {
   try {
