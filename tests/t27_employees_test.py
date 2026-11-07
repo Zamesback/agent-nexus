@@ -90,7 +90,7 @@ def fake_ensure_profile(project, agent_id, name=None, role=None):
 orig = {k: getattr(S, k) for k in (
     "PROJECTS_ROOT", "load_board", "save_board", "board_lock",
     "invite_agent", "_dsh_ensure_profile", "_dsh_member_cfg",
-    "_dsh_save_member_cfg", "_dsh_artifacts_load")}
+    "_dsh_save_member_cfg", "_dsh_artifacts_load", "_dsh_log")}
 
 try:
     S.PROJECTS_ROOT = tmp
@@ -101,6 +101,7 @@ try:
     S._dsh_ensure_profile = fake_ensure_profile
     S._dsh_member_cfg = lambda project, agent_id: dict(MEMBER_CFG.get(agent_id) or {})
     S._dsh_save_member_cfg = lambda project, agent_id, cfg: MEMBER_CFG.__setitem__(agent_id, cfg)
+    S._dsh_log = lambda *a, **k: None   # 测试不要往真实 /tmp/dsh_server.log 里写噪音
     S._dsh_artifacts_load = lambda project: {
         "dsh-1": [{"path": "/p/_src/t255/wall_v4.png", "tool": "write", "ts": "2026-11-01T10:00:00"},
                   {"path": "/p/docs/验收/T255.md", "tool": "edit", "ts": "2026-11-01T11:00:00"}]
