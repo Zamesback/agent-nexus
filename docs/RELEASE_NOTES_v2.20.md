@@ -2,7 +2,7 @@
 
 > The v2.20 arc is **process hosting**: an agent stops being a prompt you paste and becomes a real
 > local process that the board can wake, watch, and ask *you* for permission before it touches
-> anything. This is the write-up of what landed between v2.20.6 and v2.20.34.
+> anything. This is the write-up of what landed between v2.20.6 and v2.20.35.
 
 ![Org chart](screenshots/05-org-chart.png)
 
@@ -165,6 +165,15 @@ The artifact registry only sees `write` / `edit` / `present`; art assets are mad
 working directory for files changed during that turn — images, documents, audio/video — with noisy
 directories pruned, newest first, at most eight, de-duplicated against the registry. Attachments are
 under the reply, whether the agent wrote the file or a script did.
+
+## 15. Employees travel between projects
+
+A hosted member that did well in one project can be promoted to an **employee**: a record outside any
+project, with a memory distilled from board facts (completed tasks, deliverables, decisions — never the
+chat transcript). Assigning that employee to another project creates a hosted seat there, and its
+identity anchor carries the memory, framed as past experience rather than instructions, with the current
+project's board taking precedence. Sessions cannot travel — dsh binds a session to its working directory —
+so the memory travels as text instead.
 
 ## Running it
 

@@ -1,3 +1,41 @@
+## v2.20.35 — Employees: a seat becomes a person with a memory
+
+Zames: "in a project someone does well — let me turn them into an employee. If a new project needs
+them, I assign the employee and they arrive with the old project's memory." This is P0 of
+`docs/DESIGN-员工-跨项目记忆-v1.md`: the smallest closed loop that proves experience actually travels.
+
+The hard constraint is stated up front in the design: **a dsh session is bound to its working directory**
+(`_dsh_session_usable` already refuses to resume a session recorded elsewhere), so cross-project memory
+cannot be a session. It has to be text that travels.
+
+**Promote.** A hosted member's card gains `转为员工`. That writes an employee record under
+`<projects-root>/.agentnexus/employees/` plus a memory file, distilled *deterministically* from board
+facts — completed tasks, deliverables, recent decisions — with no model call and **no chat transcript**.
+The member keeps its seat and is simply stamped with `employee_id`; the roster array is never rewritten
+(the old data-safety red line).
+
+**Assign.** The header gains an `员工` library. Assigning an employee to a project creates a hosted seat
+(invite with `entry_type=dsh`, a `dsh.members` slot, a profile), records the project in the employee's
+history, and refuses a second seat for the same employee in the same project — a clone in the same room
+would contradict itself.
+
+**Carry.** `_dsh_run` appends an 【员工记忆】 block to the identity anchor, capped at ~1,500 characters,
+framed as *"past experience for judgement only, not your task here; this project's board wins"*. The
+memory file itself is capped at 8 KB and truncated with a note, so neither context nor disk grows without
+bound.
+
+**Decisions taken (open to revision):** readable slug ids with a numeric suffix on collision; one seat per
+employee per project; memory visible and editable by the user (a `看记忆` button today, an editor in P1);
+history keeps its attribution when a seat is retired.
+
+Tests: `tests/t27_employees_test.py` 53/53 — slug ids and collision suffixes, the memory's contents
+(done tasks included, unfinished and other people's tasks excluded, deliverables and decisions present),
+the link step not dropping roster members, duplicate promotion refused, seat creation with profile and
+member config, the same-project guard, the 8 KB and 1,500-character caps, the anchor framing, and the
+frontend wiring. Full regression green: 26 files, 1009 assertions — T5 27, T6 12, T7 22, T8 13, T9 36,
+T10 82, T11 49, T12 30, T13 37, T14 114, T15 64, T16 40, T17 35, T18 41, T19 25, T20 61, T21 55 + 17,
+T22 45, T23 48 + 16, T24 37 + 13, T25 14, T26 23, T27 53.
+
 ## v2.20.34 — Deliverables show up even when a script made them
 
 Zames: "the deliverables under the reply — I still haven't seen it." The pipeline was fine; the data

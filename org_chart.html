@@ -616,6 +616,16 @@
   .dsh-att-chip .x { cursor: pointer; color: var(--dim-2); font-weight: 700; }
   .dsh-att-chip .x:hover { color: #f85149; }
   .person-right.dragover { outline: 2px dashed var(--accent); outline-offset: -6px; }
+  /* v2.20.35：员工（跨项目记忆） */
+  .emp-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+               font-family: var(--mono); color: var(--accent); border: 1px solid var(--line);
+               border-radius: 6px; padding: 2px 6px; }
+  .emp-list { max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .emp-item { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel-2); }
+  .emp-item .emp-head { display: flex; align-items: center; gap: 8px; }
+  .emp-item .emp-name { font-weight: 600; }
+  .emp-item .emp-meta { font-size: 11px; color: var(--dim-2); font-family: var(--mono); }
+  .emp-item .emp-acts { margin-top: 8px; display: flex; gap: 6px; }
   .dsh-input-row { display: flex; gap: 8px; margin-top: 8px; }
   .dsh-input-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 9px 12px; font-size: 13px; outline: none; }
   .dsh-input-row input:focus { border-color: var(--line-2); }
@@ -640,6 +650,7 @@
     <div class="topbar-right">
       <button class="btn" id="btn-board" title="切到任务看板">看板</button>
       <button class="btn" id="btn-discuss" title="多人讨论室（终端托管成员）" onclick="openDiscuss()">讨论室</button>
+      <button class="btn" id="btn-employees" title="员工库：跨项目记忆，可指派进本项目" onclick="openEmp()">员工</button>
       <button class="btn" id="btn-edit" title="编辑汇报关系">编辑层级</button>
       <button class="btn primary" id="btn-position" title="加入新 Agent">＋ 加位子</button>
       <button class="btn ghost" id="btn-layout" onclick="toggleLayout()" title="切换组织图布局方向（左右/上下）">⇄ 左右</button>
@@ -694,6 +705,16 @@
   </div>
 
   <!-- 加位子弹窗 -->
+  <div class="modal-mask" id="empModal" onclick="if(event.target===this)closeEmp()">
+    <div class="modal" style="width:680px;">
+      <div class="modal-head">
+        <div style="font-size:15px;font-weight:600;">👤 员工库 · 跨项目记忆</div>
+        <button class="modal-close" onclick="closeEmp()">✕</button>
+      </div>
+      <div id="empList" class="emp-list"><div class="work-empty">加载中…</div></div>
+    </div>
+  </div>
+
   <div class="modal-mask" id="posModal" onclick="if(event.target===this)closePos()">
     <div class="modal" style="width:500px;">
       <div class="modal-head">
@@ -1592,6 +1613,9 @@ function openPerson(agentId) {  const a = agentById[agentId];
       <button class="btn mini" onclick="renameAgent('${esc(a.id)}')">✎ 改名</button>
       <button class="btn mini" onclick="renameRole('${esc(a.id)}')">✎ 身份</button>
       ${(a.entry_type === 'guide' || (a.entry && a.entry.target === '引导词接入')) ? `<button class="btn mini" onclick="regenGuide('${esc(a.id)}')">重发引导词</button>` : ''}
+      ${isTerminalAgent(a) ? (a.employee_id
+        ? `<span class="emp-badge" title="员工档案：${esc(a.employee_id)}">👤 员工</span>`
+        : `<button class="btn mini" onclick="empPromote('${esc(a.id)}')">转为员工</button>`) : ''}
       <button class="btn mini danger" onclick="removeAgent('${esc(a.id)}')">移除成员</button>
       <span style="font-size:11px;color:var(--dim-2);margin-left:auto;font-family:var(--mono);">拖动节点可自由排布</span>
     </div>`}
@@ -3431,6 +3455,86 @@ function openBoard() {
   location.href = 'collab_board_nothing.html' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '');
 }
 
+/* ===== v2.20.35：员工（跨项目记忆，P0） =====
+   一个成员在项目里表现好了 → 转成员工（提炼看板事实成记忆）→ 进新项目时带着经验。
+   设计稿：docs/DESIGN-员工-跨项目记忆-v1.md */
+async function openEmp() {
+  document.getElementById('empModal').classList.add('show');
+  await loadEmpList();
+}
+function closeEmp() { document.getElementById('empModal').classList.remove('show'); }
+async function loadEmpList() {
+  const box = document.getElementById('empList');
+  if (!box) return;
+  box.innerHTML = '<div class="work-empty">加载中…</div>';
+  try {
+    const r = await fetch('/api/employees' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''));
+    const j = await r.json();
+    const items = j.employees || [];
+    if (!items.length) {
+      box.innerHTML = '<div class="work-empty">还没有员工 —— 打开一个终端托管成员的卡片，点「转为员工」。</div>';
+      return;
+    }
+    box.innerHTML = items.map(function (e) {
+      const projs = (e.projects || []).map(function (p) {
+        return esc(p.project) + (p.to ? '（已退出）' : '');
+      }).join('、') || '—';
+      const act = e.in_project
+        ? '<span class="emp-meta">已在本项目</span>'
+        : '<button class="btn mini" onclick="empAssign(\'' + esc(e.id) + '\')">指派到本项目</button>';
+      return '<div class="emp-item">' +
+        '<div class="emp-head"><span class="emp-name">' + esc(e.name || e.id) + '</span>' +
+        '<span class="emp-meta">' + esc(e.role || '') + '</span>' +
+        '<span class="emp-meta" style="margin-left:auto;">记忆 ' + fmtBytes(e.memory_bytes || 0) + '</span></div>' +
+        '<div class="emp-meta">履历：' + projs + '</div>' +
+        '<div class="emp-acts">' + act +
+        '<button class="btn mini" onclick="empView(\'' + esc(e.id) + '\')">看记忆</button></div></div>';
+    }).join('');
+  } catch (err) {
+    box.innerHTML = '<div class="work-empty">加载失败：' + esc(err.message) + '</div>';
+  }
+}
+async function empView(id) {
+  try {
+    const r = await fetch('/api/employees?id=' + encodeURIComponent(id));
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '读取失败');
+    alert('【' + (j.employee.name || id) + '】的员工记忆\n\n' + (j.memory || '（空）'));
+  } catch (e) { alert('读取失败：' + e.message); }
+}
+async function empPromote(memberId) {
+  if (!confirm('把这个成员转为「员工」？\n\n会从他的看板事实（完成的任务 / 交付物 / 决策）提炼一份记忆，' +
+               '以后进别的项目时会带着这份记忆。')) return;
+  try {
+    const r = await fetch('/api/employees/promote' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: PROJECT, member_id: memberId })
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || j.message || '失败');
+    const emp = j.employee || {};
+    alert('已转为员工：' + (emp.name || memberId) + '\n记忆 ' + fmtBytes(emp.memory_bytes || 0));
+    await loadBoard();
+    const modal = document.getElementById('personModal');
+    if (modal && modal.classList.contains('show')) openPerson(memberId);
+  } catch (e) { alert('转员工失败：' + e.message); }
+}
+async function empAssign(empId) {
+  if (!PROJECT) { alert('先选定一个项目'); return; }
+  if (!confirm('把这个员工指派到「' + PROJECT + '」？\n\n会新建一个终端托管席位，并在身份锚定里带上他的员工记忆。')) return;
+  try {
+    const r = await fetch('/api/employees/assign' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : ''), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: PROJECT, employee_id: empId })
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || j.message || '失败');
+    alert(j.message || '已指派');
+    await loadBoard();
+    await loadEmpList();
+  } catch (e) { alert('指派失败：' + e.message); }
+}
+
 /* ===== 绑定 ===== */
 document.getElementById('btn-board').onclick = openBoard;
 document.getElementById('btn-position').onclick = openPos;
@@ -3441,7 +3545,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.34';
+const BUILD_VERSION = 'v2.20.35';
 let dshPageStamp = '';
 function showBuildTag() {
   try {

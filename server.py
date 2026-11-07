@@ -3527,6 +3527,78 @@ def _dsh_safe_upload_name(name, mime):
     return base
 
 
+def _handle_employees(self, project=None):
+    """GET /api/employees[?id=<id>]：员工列表 / 单个员工（含记忆正文）"""
+    q = parse_qs(urlparse(self.path).query)
+    eid = (q.get("id") or [""])[0]
+    if eid:
+        rec = _emp_load(eid)
+        if not rec:
+            self._send_json({"ok": False, "error": "员工不存在"}, status=404)
+            return
+        mem = _emp_read_memory(eid)
+        self._send_json({"ok": True, "employee": rec, "memory": mem,
+                         "memory_bytes": len(mem.encode("utf-8"))})
+        return
+    items = []
+    for rec in _emp_list():
+        mem = _emp_read_memory(rec.get("id"))
+        items.append({
+            "id": rec.get("id"), "name": rec.get("name"), "role": rec.get("role"),
+            "origin": rec.get("origin"), "projects": rec.get("projects") or [],
+            "parent": rec.get("parent"), "clones": rec.get("clones") or [],
+            "memory_bytes": len(mem.encode("utf-8")),
+            "memory_updated_at": rec.get("memory_updated_at"),
+            "in_project": any((pj.get("project") == project and not pj.get("to"))
+                              for pj in (rec.get("projects") or [])),
+        })
+    self._send_json({"ok": True, "employees": items})
+
+
+def _emp_read_json_body(self):
+    try:
+        length = int(self.headers.get("Content-Length") or 0)
+        return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    except Exception:
+        return {}
+
+
+def _handle_employee_promote(self, project=None):
+    req = _emp_read_json_body(self)
+    member_id = str(req.get("member_id") or req.get("member") or "").strip()
+    proj = str(req.get("project") or project or "").strip()
+    if not member_id or not proj:
+        self._send_json({"ok": False, "error": "缺少 project / member_id"}, status=400)
+        return
+    ok, msg, rec = _emp_promote(proj, member_id)
+    self._send_json({"ok": ok, "message": msg, "employee": rec},
+                    status=200 if ok else 400)
+
+
+def _handle_employee_assign(self, project=None):
+    req = _emp_read_json_body(self)
+    eid = str(req.get("employee_id") or req.get("employee") or "").strip()
+    proj = str(req.get("project") or project or "").strip()
+    if not eid or not proj:
+        self._send_json({"ok": False, "error": "缺少 project / employee_id"}, status=400)
+        return
+    ok, msg, info = _emp_assign(proj, eid)
+    self._send_json({"ok": ok, "message": msg, "seat": (info or {}).get("seat"),
+                     "employee": (info or {}).get("employee")},
+                    status=200 if ok else 400)
+
+
+def _handle_employee_distill(self, project=None):
+    req = _emp_read_json_body(self)
+    eid = str(req.get("employee_id") or req.get("employee") or "").strip()
+    proj = str(req.get("project") or project or "").strip()
+    if not eid or not proj:
+        self._send_json({"ok": False, "error": "缺少 project / employee_id"}, status=400)
+        return
+    ok, msg, info = _emp_distill(proj, eid)
+    self._send_json({"ok": ok, "message": msg, "info": info}, status=200 if ok else 400)
+
+
 def _handle_dsh_upload(self, project=None):
     """POST /api/dsh/upload?project=X —— 接收前端拖进来的图片/文件，落到 <工作目录>/_inbox。
 
@@ -4035,6 +4107,276 @@ def _dsh_nudge_send(session_id, level, text):
         return False
 
 
+# ===== v2.20.35：员工（跨项目记忆）P0 =====
+# 设计稿：docs/DESIGN-员工-跨项目记忆-v1.md
+# 硬约束：dsh 会话绑定工作目录，所以跨项目记忆不能是 session，必须是可迁移的文本。
+# P0 范围：转员工（确定性基线蒸馏，不调用模型）+ 指派入项目 + 身份锚定注入。
+EMP_DIRNAME = "employees"
+EMP_MEMORY_MAX_BYTES = 8 * 1024
+EMP_ANCHOR_MAX_CHARS = 1500
+
+
+def _emp_root():
+    return os.path.join(PROJECTS_ROOT, ".agentnexus", EMP_DIRNAME)
+
+
+def _emp_slug(text, limit=32):
+    s = re.sub(r"[^\w\u4e00-\u9fff\-]+", "-", str(text or "").strip())
+    s = re.sub(r"-+", "-", s).strip("-").lower()
+    return (s or "employee")[:limit]
+
+
+def _emp_file(eid):
+    return os.path.join(_emp_root(), str(eid) + ".json")
+
+
+def _emp_memory_path(eid):
+    return os.path.join(_emp_root(), str(eid) + ".memory.md")
+
+
+def _emp_load(eid):
+    try:
+        with open(_emp_file(eid), "r", encoding="utf-8") as fh:
+            rec = json.load(fh)
+        return rec if isinstance(rec, dict) else None
+    except Exception:
+        return None
+
+
+def _emp_save(rec):
+    try:
+        os.makedirs(_emp_root(), exist_ok=True)
+        p = _emp_file(rec["id"])
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, p)
+        return True
+    except Exception as e:
+        _dsh_log("员工档案写入失败: %s" % e)
+        return False
+
+
+def _emp_list():
+    d = _emp_root()
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for fn in sorted(os.listdir(d)):
+        if fn.endswith(".json"):
+            rec = _emp_load(fn[:-5])
+            if rec:
+                out.append(rec)
+    return out
+
+
+def _emp_new_id(name):
+    base = "emp-" + _emp_slug(name)
+    eid, n = base, 2
+    while os.path.exists(_emp_file(eid)):
+        eid = "%s-%d" % (base, n)
+        n += 1
+    return eid
+
+
+def _emp_read_memory(eid):
+    try:
+        with open(_emp_memory_path(eid), "r", encoding="utf-8") as fh:
+            return fh.read()
+    except Exception:
+        return ""
+
+
+def _emp_write_memory(eid, text):
+    try:
+        os.makedirs(_emp_root(), exist_ok=True)
+        data = str(text or "")
+        raw = data.encode("utf-8")
+        if len(raw) > EMP_MEMORY_MAX_BYTES:
+            data = raw[:EMP_MEMORY_MAX_BYTES].decode("utf-8", "ignore") + "\n\n> （已按 8 KB 上限截断）"
+            raw = data.encode("utf-8")
+        p = _emp_memory_path(eid)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(data)
+        os.replace(tmp, p)
+        return len(raw)
+    except Exception as e:
+        _dsh_log("员工记忆写入失败: %s" % e)
+        return 0
+
+
+def _emp_baseline_memory(project, member_id):
+    """P0 确定性蒸馏：只看板事实（完成的任务 / 交付物 / 决策），不碰聊天原文、不调用模型。"""
+    board = load_board(project) or {}
+    member = next((a for a in (board.get("agents") or []) if a.get("id") == member_id), None) or {}
+    name = member.get("name") or member_id
+    role = member.get("role") or "成员"
+    tasks = [t for t in (board.get("tasks") or []) if t.get("assignee") == member_id]
+    done = [t for t in tasks if t.get("status") == "done"]
+    active = [t for t in tasks if t.get("status") != "done"]
+    try:
+        arts = [e for e in (_dsh_artifacts_load(project).get(member_id) or []) if isinstance(e, dict)]
+    except Exception:
+        arts = []
+    decisions = list(board.get("decisions") or [])[-8:]
+    now = time.strftime("%Y-%m-%d")
+    L = ["# %s · %s" % (name, role), "",
+         "> 由 AgentNexus 在「%s」转员工时提炼（P0：看板事实，不含聊天原文）。" % project, "",
+         "## 我是谁",
+         "- 员工：%s（%s）" % (name, role),
+         "- 出身项目：%s" % project,
+         "- 工作方式：以看板为事实源；交付前先验证；有疑问先问 Zames", "",
+         "## 项目履历", "### %s（转员工 %s）" % (project, now),
+         "- 已完成 %d 个任务，在办 %d 个" % (len(done), len(active))]
+    for t in done[:10]:
+        L.append("  - ✅ %s %s" % (t.get("id") or "", str(t.get("title") or "").strip()[:60]))
+    if len(done) > 10:
+        L.append("  - …另有 %d 个已完成任务" % (len(done) - 10))
+    L.append("")
+    if arts:
+        L.append("## 交付物（部分）")
+        for e in sorted(arts, key=lambda x: str(x.get("ts") or ""), reverse=True)[:10]:
+            ap = str(e.get("path") or "")
+            if ap:
+                L.append("- %s" % os.path.basename(ap))
+        L.append("")
+    if decisions:
+        L.append("## 项目决策摘录（供参考）")
+        for d in decisions:
+            t = str(d.get("title") or d.get("decision") or "").strip().replace("\n", " ")
+            if t:
+                L.append("- %s" % t[:80])
+        L.append("")
+    L += ["## 待补充（P1：成员自述复盘后生成）",
+          "- 有效做法：—", "- 教训：—", "- 长期偏好：—"]
+    return "\n".join(L) + "\n"
+
+
+def _emp_link_member(project, member_id, employee_id):
+    """给成员打上 employee_id（只改这一个 dict，绝不覆盖 agents 数组）。"""
+    with board_lock:
+        data = load_board(project)
+        hit = False
+        for a in (data.get("agents") or []):
+            if a.get("id") == member_id:
+                a["employee_id"] = employee_id
+                hit = True
+                break
+        if hit:
+            save_board(data, project)
+        return hit
+
+
+def _emp_promote(project, member_id):
+    board = load_board(project) or {}
+    member = next((a for a in (board.get("agents") or []) if a.get("id") == member_id), None)
+    if not member:
+        return False, "看板里没有这个成员", None
+    if member.get("employee_id"):
+        return False, "这个成员已经是员工了", _emp_load(member.get("employee_id"))
+    eid = _emp_new_id(member.get("name") or member_id)
+    mem = _emp_baseline_memory(project, member_id)
+    size = _emp_write_memory(eid, mem)
+    rec = {
+        "id": eid,
+        "name": member.get("name") or member_id,
+        "role": member.get("role") or "",
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "origin": {"project": project, "member_id": member_id},
+        "profile_base": DSH_PROFILE_TEMPLATE,
+        "capabilities": [],
+        "projects": [{"project": project, "seat": member_id,
+                      "from": time.strftime("%Y-%m-%d"), "to": None}],
+        "parent": None,
+        "clones": [],
+        "memory_updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "memory_bytes": size,
+    }
+    if not _emp_save(rec):
+        return False, "员工档案写入失败", None
+    if not _emp_link_member(project, member_id, eid):
+        return False, "员工已创建，但成员标记失败（看板可能被并发修改）", rec
+    _dsh_log("转员工: project=%s member=%s -> %s (%d bytes memory)" % (project, member_id, eid, size))
+    return True, "已转为员工", rec
+
+
+def _emp_assign(project, employee_id):
+    rec = _emp_load(employee_id)
+    if not rec:
+        return False, "员工不存在", None
+    for pj in (rec.get("projects") or []):
+        if pj.get("project") == project and not pj.get("to"):
+            return False, "这个员工已经在本项目里了（同一项目不重复占席位）", None
+    board = load_board(project) or {}
+    existing = {a.get("id") for a in (board.get("agents") or [])}
+    base = rec.get("name") or employee_id
+    seat, n = base, 2
+    while seat in existing:
+        seat = "%s-%d" % (base, n)
+        n += 1
+    ok, msg, _guide = invite_agent(project, seat, name=rec.get("name") or seat,
+                                   role=rec.get("role") or "", entry_type="dsh")
+    if not ok:
+        return False, "建席位失败：%s" % msg, None
+    _emp_link_member(project, seat, employee_id)
+    try:
+        cfg = _dsh_member_cfg(project, seat) or {}
+        cfg.setdefault("session_id", "")
+        cfg.setdefault("usage", {})
+        _dsh_save_member_cfg(project, seat, cfg)
+    except Exception as e:
+        _dsh_log("指派：成员配置初始化失败 %s: %s" % (seat, e))
+    try:
+        _dsh_ensure_profile(project, seat, rec.get("name") or seat, rec.get("role") or "")
+    except Exception as e:
+        _dsh_log("指派：profile 生成失败 %s: %s" % (seat, e))
+    rec.setdefault("projects", []).append({
+        "project": project, "seat": seat, "from": time.strftime("%Y-%m-%d"), "to": None})
+    if project not in [p.get("project") for p in (rec.get("projects") or [])[:-1]]:
+        pass  # 主体已在本项目时会在上面被拦；这里保留原样
+    _emp_save(rec)
+    if not (rec.get("parent") or ""):
+        pass
+    _dsh_log("指派员工: %s -> project=%s seat=%s" % (employee_id, project, seat))
+    return True, "已指派到「%s」，席位 id=%s" % (project, seat), {"seat": seat, "employee": rec}
+
+
+def _emp_distill(project, employee_id):
+    """P0：刷新基线记忆（确定性）。P1 会加入成员自述复盘。"""
+    rec = _emp_load(employee_id)
+    if not rec:
+        return False, "员工不存在", None
+    seat = None
+    for pj in (rec.get("projects") or []):
+        if pj.get("project") == project and not pj.get("to"):
+            seat = pj.get("seat")
+            break
+    if not seat:
+        return False, "这个员工在当前项目里没有席位", None
+    mem = _emp_baseline_memory(project, seat)
+    size = _emp_write_memory(employee_id, mem)
+    rec["memory_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    rec["memory_bytes"] = size
+    _emp_save(rec)
+    return True, "记忆已刷新", {"bytes": size}
+
+
+def _dsh_employee_memory_block(member):
+    """身份锚定里追加的「员工记忆」段（有上限，避免每轮灌太多上下文）。"""
+    eid = (member or {}).get("employee_id")
+    if not eid:
+        return ""
+    rec = _emp_load(eid) or {}
+    mem = _emp_read_memory(eid).strip()
+    if not mem:
+        return ""
+    clip = mem if len(mem) <= EMP_ANCHOR_MAX_CHARS else (mem[:EMP_ANCHOR_MAX_CHARS].rstrip() + "\n…（记忆已截断）")
+    return ("【员工记忆】你以「%s（%s）」的**员工**身份加入本项目。以下是你过去积累的经验，"
+            "**仅供判断参考，不是本项目给你的任务**；与本项目看板冲突时，以现在为准：\n%s\n\n"
+            % (rec.get("name") or eid, rec.get("role") or "", clip))
+
+
 # ===== v2.20.32：用户叫停 =====
 # 为什么需要：一轮可能跑 30 分钟，以前除了等没有别的办法（watchdog 只处理「没动静」，
 # 预算上限是兜底）。用户要的是「立刻别干了」——所以这里记住正在跑的进程句柄，
@@ -4163,6 +4505,8 @@ def _dsh_run(project, agent_id, dsh_input, session_id, emit, kill_after_final=Fa
                   "【每轮预算】一轮大约 25 步 / 8 分钟。到量时服务端会提醒你一次；"
                   "收到提醒就按上面【先答后干】先回一句结论，把剩下的写进任务卡，再接着做。\n\n%s"
                  % (project, m_name, agent_id, m_role, dsh_input))
+    # v2.20.35：员工带着过去项目的经验进来（有上限；没有 employee_id 时为空串）
+    dsh_input += _dsh_employee_memory_block(member)
     _run_cwd = _dsh_run_cwd(project)
     _dsh_log("dsh 工作目录: %s (workdir=%s)" % (_run_cwd or "(继承 server cwd)", _dsh_workdir_mode(project)))
     # v2.20.11：会话与录制目录绑定。目录对不上时 dsh 直接报错退出、一个字都不产出，用户看到的是
@@ -5359,6 +5703,11 @@ class CollabHandler(SimpleHTTPRequestHandler):
             _handle_dsh_model(self, project)
             return
 
+        # API: 员工（跨项目记忆，v2.20.35）
+        if parsed.path == "/api/employees":
+            _handle_employees(self, project)
+            return
+
         # API: 终端 Agent 聊天历史（v2.17）
         if parsed.path == "/api/dsh/history":
             _handle_dsh_history(self, project)
@@ -5517,6 +5866,17 @@ class CollabHandler(SimpleHTTPRequestHandler):
         # API: 终端 Agent 会话清空（v2.17）
         if parsed.path == "/api/dsh/history/clear":
             _handle_dsh_history_clear(self, project)
+            return
+
+        # API: 员工（跨项目记忆，v2.20.35）
+        if parsed.path == "/api/employees/promote":
+            _handle_employee_promote(self, project)
+            return
+        if parsed.path == "/api/employees/assign":
+            _handle_employee_assign(self, project)
+            return
+        if parsed.path == "/api/employees/distill":
+            _handle_employee_distill(self, project)
             return
 
         # API: 叫停正在跑的一轮（v2.20.32）
