@@ -1,3 +1,35 @@
+## v2.20.38 — The guidance now matches whether we can actually wake the agent
+
+Zames, on the previous suggestion: "I don't mean another adapter — the guidance we hand out already
+carries rules. For a guidance-mode agent, add the rule that it polls the board every so often for
+messages addressed to it, and delivers what it finds." Then the principle: **anything we can wake does
+not need to poll; anything we cannot wake must check on its own.**
+
+The old text had it backwards in places: every mode was told to "poll every 2~5 minutes", including the
+API mode that we *do* push to, and the shared base told everyone to check every 30 minutes — a number
+nobody could configure and that was wrong for a hosted member who is simply woken up.
+
+Each connection type now gets the posture its wake capability implies:
+
+- **hosted (`dsh`)** — the tool starts the process on a mention, so: *you do not poll*.
+- **API** — the server POSTs `message.mention` to the registered webhook, so: *you do not poll*; the old
+  line is replaced by the push contract plus a fallback board read for when the callback fails.
+- **CLI** — we cannot start a process that lives in someone else's terminal, so it must run
+  `agentnexus status` on a schedule and write back through `agentnexus send` / `update`.
+- **guidance (`guide`)** — cannot be woken at all, so it is framed for what it is: an **outside
+  collaborator**. It works inside its own agent, the board is the only handover surface, it checks the
+  board itself on a schedule, and it delivers by writing to the board. The text also tells agents with no
+  network or file access (a plain chat window) to skip the automation entirely, so they do not pretend to
+  have checked something.
+
+The interval is configurable per project (`protocol.poll_minutes`, default 30, clamped 1–1440) and only
+appears where polling is actually the mechanism.
+
+Tests: `tests/t30_guide_modes_test.py` 47/47 — the interval and its clamping, each mode's posture
+(polling demanded for CLI/guidance, forbidden for API/hosted), the fallback for a chat-only agent, the
+shared skeleton (identity, board red lines, working/off), and the guidance each `invite_agent` branch
+actually emits. Full regression green: 29 files, 1114 assertions.
+
 ## v2.20.37 — A company view for the people who outgrew a project
 
 Zames: "the 员工 button crowds the top bar — put it on the left, under the projects, and make it a

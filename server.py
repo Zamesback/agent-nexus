@@ -909,18 +909,67 @@ def register_agent(project, agent_id, entry, name=None, role=None):
     return True, f"Agent {agent_id} 注册成功"
 
 
-def build_guide(project, agent_id, name, role):
-    """v2.13: 生成引导词（供引导词接入的 Agent 粘贴，明确其身份认知）"""
+def _protocol_poll_minutes(project=None):
+    """外部协作成员的轮询间隔（分钟）：默认 30，可用看板 protocol.poll_minutes 调。"""
+    mins = 30
+    try:
+        proto = (load_board(project) or {}).get("protocol") or {}
+        v = int(proto.get("poll_minutes") or 0)
+        if 1 <= v <= 1440:
+            mins = v
+    except Exception:
+        pass
+    return mins
+
+
+def _guide_mode_block(mode, project, agent_id, minutes):
+    """按「能不能被叫醒」给出不同的协作姿态。
+
+    v2.20.38 的原则（Zames 提的）：能被唤醒的就不用轮询，叫不动的必须自己来查。
+      · api  —— 服务端会 POST 到它的 webhook → 不用轮询（只留兜底）
+      · dsh  —— 工具直接拉起进程 → 不用轮询
+      · cli  —— 我们叫不动它的进程 → 必须自己定时查
+      · guide—— 更叫不动（外包），必须自己定时看板，且要允许"没联网能力"的兜底
+    """
+    if mode == "api":
+        return """【协作方式 · 推送（会被叫醒）】
+- 有人 @ 你时，本项目服务端会主动 POST 到你注册的地址（entry.target），payload 里 event=message.mention。
+- **你不需要轮询**：收到推送就动手；干完把结果 POST 回 /api/messages 写进看板。
+- 兜底：若长时间收不到任何推送（网络或回调失败），再主动 GET /api/board 查一次有没有漏掉的消息。"""
+    if mode == "cli":
+        return f"""【协作方式 · 轮询（我们叫不动你）】
+- 我们**不会**推送给 CLI 成员，也不会替你启动进程——你的进程在你自己的终端里。
+- 你得自己定时来查：每 {minutes} 分钟跑一次 `agentnexus status --project "{project}"`，检查：
+  ① @ 到你的消息；② assignee 里有你（{agent_id}）的任务；③ 你领的任务有没有新的验收意见。
+- 有活就干，用 `agentnexus send` / `agentnexus update` 把结果写回看板。
+- 收工态（protocol.mode=off）时停止主动轮询，只在被明确指派时再回来处理。"""
+    if mode == "dsh":
+        return """【协作方式 · 托管（会被叫醒）】
+- 你由本工具直接托管：Zames 在卡片里跟你说话、或在看板上 @ 你，工具会直接把你叫起来跑一轮。
+- **你不需要轮询**，也不用人提醒：被叫了就干，干完把结论回给 Zames 或写回看板。"""
+    return f"""【协作方式 · 外部协作（外包员工）】
+你不在这个项目的常驻班子里：你在你自己的 Agent 里干活，我们只通过一张公共看板跟你交接。
+- **没有任何机制会叫醒你**：不会有推送，也不会有人替你拉起进程。
+- 所以你得**自己定时来看**：每 {minutes} 分钟读一次看板
+  （GET /api/board?project={project}，或直接看项目目录下的 collab_board.json），检查：
+  ① @ 到你的消息；② assignee 里有你（{agent_id}）的任务；③ 你领过的任务有没有验收意见。
+- 看到活就干；干完**在看板上交付**：发一条消息说明结果，再把任务状态改成 done（或待验收）。
+- 如果你所在的 Agent 没有联网 / 读文件能力（纯聊天窗口），跳过以上自动化：
+  由人把看板内容粘给你，你再把结果粘回看板。"""
+
+
+def build_guide(project, agent_id, name, role, mode="guide"):
+    """v2.13 / v2.20.38：生成引导词（按接入方式给出「能不能被叫醒」对应的协作姿态）"""
     role_txt = role or "成员"
-    return f"""你是「{project}」项目班子里的一名成员。
+    minutes = _protocol_poll_minutes(project)
+    return f"""你是「{project}」项目的协作成员（{mode} 接入）。
 
 【你的身份】
 - 名字：{name}
 - 身份 ID：{agent_id}（这是你的唯一标识，全程不要改动）
 - 职责：{role_txt}
 
-【协作方式】
-这个项目使用「协同看板」工作：任务、消息、决策都记录在项目目录下的 collab_board.json（或通过 /api/board?project={project} 读取）。你的所有工作都在看板上留痕。
+{_guide_mode_block(mode, project, agent_id, minutes)}
 
 【数据安全 · 看板 JSON 红线】
 - collab_board.json 的 agents 数组是班子名单，**禁止直接编辑或覆盖**；增减成员一律走组织视图「拉人进班子」或 /api/agents/* 接口。
@@ -928,8 +977,8 @@ def build_guide(project, agent_id, name, role):
 
 【协作协议 · 工作态/收工态】
 - 看板顶层 protocol.mode 是项目当前协作状态：
-  · working（工作态）：认领任务后，每 30 分钟自动检查任务看板对齐一次——有任务就开工、有交付就标记待验收、有验收就收尾；被 @ 的消息及时响应。
-  · off（收工态）：停止主动轮询和认领新任务，但保留被动响应——被 @ 或收到新指派时仍会回复处理。
+  · working（工作态）：有活就干——认领任务、推进进度、交付后标记待验收；被 @ 的消息及时响应。
+  · off（收工态）：不主动找活、不认领新任务，但被明确指派或被 @ 时仍然处理。
 - 如果你在 protocol.exemptions 名单里，即使项目处于收工态，也按工作态执行。
 
 【工作协议】
@@ -937,7 +986,6 @@ def build_guide(project, agent_id, name, role):
 2. 领取任务：找到分配给你（assignee 含 {agent_id}）或适合你职责的任务，用认领动作领取，并在回复里确认身份：「我是{name}（{agent_id}）」。
 3. 执行中持续更新任务状态（进行中/进度百分比），遇到阻塞及时在消息里说明并 @ 相关成员。
 4. 完成后把任务标记为待验收，留言交付说明；需要沉淀结论时写入决策记录。
-5. 定期检查看板更新（建议 2~5 分钟轮询一次），响应 @ 你的消息和新的任务指派。
 
 记住：你是 {name}，身份 ID {agent_id}，职责是 {role_txt}。"""
 
@@ -958,19 +1006,19 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
         return False, "entry_type 必须是 guide/api/cli/dsh/manual", ""
     if entry_type == "api":
         entry = {"type": "http", "target": (entry_target or "").strip() or "http://localhost:8766"}
-        guide = f"""Agent 接入信息（API 模式）
-项目：{project}    身份：{name}（{role or '成员'}）    id：{agent_id}
+        guide = build_guide(project, agent_id, name, role, mode="api") + f"""
 
+【接口清单 · API 接入】
+项目：{project}    身份：{name}（{role or '成员'}）    id：{agent_id}
 读取看板：  GET /api/board?project={project}
 发消息：    POST /api/messages?project={project}   body: {{"sender": "{agent_id}", "content": "..."}}
 领取任务：  POST /api/claim?project={project}     body: {{"task_id": "Txx", "assignee": "{agent_id}"}}
 更新任务：  POST /api/tasks/{{task_id}}?project={project}  body: {{"status": "doing", "progress": 40}}
 沉淀决策：  POST /api/decisions?project={project}  body: {{"title": "...", "decision": "..."}}
-
-协议：建议每 2~5 分钟轮询一次看板，响应 @ 你的消息和任务指派。"""
+"""
     elif entry_type == "cli":
         entry = {"type": "cli", "target": "tools/agentnexus"}
-        base = build_guide(project, agent_id, name, role)
+        base = build_guide(project, agent_id, name, role, mode="cli")
         guide = base + f"""
 
 【你的操作方式 · CLI（agentnexus 命令）】
@@ -984,7 +1032,7 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
   agentnexus send --project "{project}" --to planner --msg "你好"   # 发消息（@planner）
   agentnexus conclude --project "{project}" --title "决策标题" --decision "内容"
 
-轮询对齐：按上方【协作协议·工作态/收工态】执行——工作态下每 30 分钟用 agentnexus status 检查 @ 消息与任务指派；收工态停止主动检查。"""
+节奏按上方【协作方式 · 轮询】来；工作态才轮询，收工态停。"""
     elif entry_type == "dsh":
         entry = {"type": "dsh", "target": "进程托管（本机 dsh）"}
         guide = f"""Agent 接入信息（终端托管 · 进程托管模式）
@@ -993,7 +1041,9 @@ def invite_agent(project, agent_id, name, role="", entry_type="guide", entry_tar
 你不用复制粘贴任何东西：本工具会在你本机直接拉起终端 Agent（dsh）进程，自动生成专属身份配置。
 接入后到组织视图点开这个人的卡片，右下角对话框直接发指令，Agent 会实时回复并操作看板（认领任务 / 更新状态 / 发消息 / 沉淀决策）。
 
-协作协议见【协作协议·工作态/收工态】——工作态下每 30 分钟检查 @ 消息与任务指派；收工态停止主动检查。"""
+你由本工具托管：Zames 在卡片里说话或看板 @ 你，工具会直接把你叫起来——**不需要轮询**。"""
+        guide += """
+「协作方式 · 托管（会被叫醒）」：被叫了就干，干完把结论回给 Zames 或写回看板。"""
     elif entry_type == "manual":
         entry = {"type": "session", "target": "组织图手动添加"}
         guide = ""

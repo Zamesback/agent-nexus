@@ -3931,7 +3931,7 @@ document.getElementById('btn-edit').onclick = toggleEdit;
    跑的是内存里的旧 JS（服务端一直在发新文件）。而且 Python 的静态服务不发 Cache-Control，
    浏览器按启发式缓存自己猜，普通刷新都可能拿到旧副本。
    现在：① 顶栏显示版本号；② 每分钟对比本文件的 Last-Modified，变了就提示刷新。 */
-const BUILD_VERSION = 'v2.20.37';
+const BUILD_VERSION = 'v2.20.38';
 let dshPageStamp = '';
 function showBuildTag() {
   try {
