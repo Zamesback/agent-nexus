@@ -7,6 +7,8 @@
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-orange.svg)](#)
 [![Stars](https://img.shields.io/github/stars/Zamesback/agent-nexus.svg)](https://github.com/Zamesback/agent-nexus/stargazers)
 
+**English** | [中文](README.zh.md)
+
 > **What's new in v2.20** — agents that run as real local processes, per-member chat history that survives restarts, multi-agent discussion rooms, an approval loop for permission walls, and per-turn budgets. Full write-up: [`docs/RELEASE_NOTES_v2.20.md`](docs/RELEASE_NOTES_v2.20.md).
 
 ---
