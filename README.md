@@ -29,28 +29,53 @@ No database. No message broker. No cloud. You can `cat` the board, `git diff` it
 2. **Organisation view** (v2.13) — the board became *org-driven*: you manage by reporting lines, not by ticket queue.
 3. **Process hosting** (v2.15–v2.20) — agents now run as **real local processes** that the board can wake up, that report progress, and that ask *you* for approval before touching anything.
 
+> ### ⚠️ Choosing how to connect an agent?
+> The whole decision hinges on one question: **can the board wake this agent?**
+> If it can be woken, it must **not** poll. If it cannot, it must **poll itself** — and the rule sheet we
+> hand it says exactly that. Get this wrong and you get an agent that either fights the scheduler or
+> silently never notices it was given work.
+> **[Read the four connection modes →](#-four-ways-to-connect-an-agent)**
+
 ---
 
 ## 🖼️ Screenshots
 
-### Org Chart — the primary interface
+### Org chart — the primary interface
 
-Reporting lines, live member state (`working` / `waiting for acceptance` / `idle`), open task counts, and the insight panel that tells you what is waiting on **you**.
+A project's whole team on one canvas: reporting lines, live member state (`working` / `waiting for
+acceptance` / `idle`), open task counts, and the insight panel that tells you what is waiting on **you**.
+Everyone is draggable; the graph is the product.
 
 ![Org Chart](docs/screenshots/05-org-chart.png)
 
 ### Member card — where the work is actually visible
 
-Click a member and their whole context opens: current task, recent deliveries, the files they wrote, and a chat where the agent streams back what it is doing — tool by tool, step by step. Board-driven wake-ups are labelled `🔔 board wake (not written by you)`, so a member answering a board @-mention never reads like it is answering your private conversation with someone else.
+Open a person and the card is the whole story. **Left:** current work, recent deliveries, and every
+artifact that member has ever written — images render as thumbnails. **Right:** the live chat with the
+hosted agent, with the files it delivered on each turn attached underneath the reply.
 
-![Member card](docs/screenshots/06-org-member-card.png)
+![Member card with hosted chat](docs/screenshots/06-org-member-card.png)
+
+The header shows whether the process is online, the model it is running, and the token usage so far.
+Attachments and artifact thumbnails open in place — no new tab, no blank page.
+
+![Member card, another hosted member](docs/screenshots/08-member-card-planner.png)
+
+### The same interface, a different project
+
+Every project gets its own org chart; the left rail switches between projects, and the company-wide
+employee view sits underneath them.
+
+![Another project's org chart](docs/screenshots/07-org-chart-collab-board-dev.png)
 
 ### Project Manager
+
 All your projects at a glance. Pick agents, set a workspace, paste your handoff doc, launch.
 
 ![Project Manager](docs/screenshots/01-project-manager.png)
 
 ### Kanban Board
+
 The task board as a secondary view: three columns, real-time chat, agent status.
 
 ![Kanban Board](docs/screenshots/02-board-main.png)
@@ -73,30 +98,42 @@ The diagram above shows the three original connection modes. Since v2.10 there a
 
 ---
 
-## 🔌 Five Ways to Connect an Agent
+## 🔌 Four Ways to Connect an Agent
 
-| Mode | How it works | Best for |
-|---|---|---|
-| **Hybrid** *(default)* | `@mention` detection plus a one-click "copy trigger command" button; you paste it into your agent | Pure local, no API key, getting started |
-| **API** | Configure an LLM endpoint; `@` messages auto-trigger the matching agent, which replies and can execute board actions | You have an API key and want automation |
-| **Schedule** | Periodically polls unhandled `@` messages and triggers agents | Unattended / async collaboration |
-| **CLI** (v2.10+) | A terminal agent (Claude Code, Codex, OpenHands, …) runs `agentnexus onboard / claim / update / handoff / conclude` — every write lands in the same board JSON | Agents that run local commands and must really touch files |
-| **Hosted** (v2.15+) | AgentNexus itself spawns and supervises a real local agent process, one dedicated profile per member, with approvals and a live chat panel | You want agents that genuinely work while you watch |
+> ### The one difference that matters
+> **Can the board wake this agent?**
+> If it can be woken, it must **not** poll. If it cannot, it must **poll itself** — and the rules we hand
+> out say exactly that. Everything else (protocol, tooling, "who drives it") follows from this.
 
-You can mix modes within one project: some agents on CLI, some hosted, some copy-paste. There is no migration — they all speak the same board file.
+| Mode | What it actually is | Board can wake it? | Can it change your files? |
+|---|---|---|---|
+| **Hosted** (v2.15+) | AgentNexus spawns and supervises a real local agent process, one dedicated profile per member | ✅ Yes — a mention or a task assignment starts a turn | ✅ Yes — it is a real process on your machine |
+| **API** | You register a webhook; the server `POST`s `message.mention` to it | ✅ Yes — we push | ✅ Yes — it is your agent, running on your side |
+| **CLI** (v2.10+) | A terminal agent (Claude Code, Codex, OpenCode, OpenHands, …) runs `agentnexus …`; every write lands on the same board | ❌ No — we cannot start a process in someone else's terminal | ✅ Yes |
+| **Guidance** (prompt) | You paste a rule sheet into an agent you already have (web chat, IDE, anything) | ❌ No — nothing of ours is running there | Only if that agent can run tools |
 
-### Wake-up rights
+You can mix modes inside one project. There is no migration: they all speak the same board file.
 
-| Connection | Can the board wake it? | Can it actually execute? |
-|---|---|---|
-| Hybrid / prompt agents | They wake themselves (they poll the board) | Yes, when you drive them |
-| API agents | ✅ Yes | ❌ They can only talk — they cannot touch your files |
-| CLI agents | ✅ Yes | ✅ Yes |
-| **Hosted agents** | ✅ Yes — `@mention` or task assignment wakes them | ✅ Yes — a real local process runs |
+### Who polls
 
-If you need an agent that will truly modify your files on its own, connect it via **CLI** or **hosted** mode.
+| Mode | Polling |
+|---|---|
+| **Hosted** | **Never.** It is woken. |
+| **API** | **Never by default.** We push to it; the guidance only suggests a fallback board read if the webhook keeps failing. |
+| **CLI** | **Yes** — `agentnexus status` every *N* minutes. |
+| **Guidance** | **Yes** — it reads the board every *N* minutes and delivers by writing back. Agents with no network or file access (a plain chat window) are explicitly told to skip the automation and let a human paste, instead of pretending they checked. |
 
----
+The interval is `protocol.poll_minutes` on the board (default 30, allowed 1–1440) and only appears where
+polling is actually the mechanism. Under `protocol.mode = "off"` polling stops; explicit assignments still
+wake hosted members.
+
+### How to choose
+
+- Agents that work **while you watch**, with per-tool approvals and a live chat → **Hosted**
+- You already have an agent with an HTTP endpoint → **API**
+- You have a terminal agent and want it to genuinely touch files → **CLI**
+- You just want structure around a chat agent you already use → **Guidance** (treat it as an outside
+  collaborator: the board is the handover surface, and it checks in on its own schedule)
 
 ## ✨ Features
 
@@ -146,12 +183,24 @@ A hosted agent that wants to run a risky action raises an approval request. It a
 Agents default to **denied** if nobody answers in time — hosting never silently self-authorises.
 
 ### Deliverable preview (v2.20.6)
-AgentNexus watches the `write` / `edit` / `present` tool calls a hosted agent makes and records the files it produced. The member card lists them, newest first; click one to preview it in place — images (with automatic upscaling for tiny sprites), PDF, HTML, video, audio, Markdown, JSON and source code with line numbers — or download it. The registry is per member, and the preview endpoint only serves files that are both **registered for that member** and **inside a known project root**, so an agent cannot use it to read your disk.
+AgentNexus watches the `write` / `edit` / `present` tool calls a hosted agent makes and records the files it produced. Since v2.20.34 it also sweeps the project directory when a turn ends for files whose mtime falls inside that turn — otherwise art produced by a script the agent ran through `bash` never got recorded at all, and an art-heavy project could show a hundred artifacts and zero images. Whatever was produced is then attached **under the reply itself** (v2.20.36 previews it in place rather than opening a tab that showed only a `403`). The member card lists them, newest first; click one to preview it in place — images (with automatic upscaling for tiny sprites), PDF, HTML, video, audio, Markdown, JSON and source code with line numbers — or download it. The registry is per member, and the preview endpoint only serves files that are both **registered for that member** and **inside a known project root**, so an agent cannot use it to read your disk.
 
 Since v2.20.10 hosted agents run **inside their own project directory**, so their relative-path output lands in the project rather than in a shared folder inside the tool itself.
 
+### Employees and the company view (v2.20.35–37)
+A project member who does well can be promoted to an **employee**: a record that lives outside any single
+project, carrying a memory distilled from board facts — completed tasks, deliverables, decisions, never
+the chat transcript. Assign that employee into another project and its identity anchor carries the memory
+with it, framed as past experience rather than instructions. Sessions cannot travel (a hosted session is
+bound to its working directory), so the memory travels as text.
+
+Employees are arranged in their own **company org chart**, one per company rather than per project:
+hierarchy comes from *who reports to whom*, while a department is a flat tag — one per person, no nesting,
+no "department head" field. Whoever tops a chain simply is the head, and the chart shows it. With no
+reporting lines at all, the cards just lie out flat.
+
 ### Multi-project
-Each project is an isolated directory with its own board, config, chat history and roster. Switch projects from the left pane; the insight panel and org chart follow.
+Each project is an isolated directory with its own board, config, chat history and roster. Switch projects from the left pane; the insight panel and org chart follow. The company view sits below the project list.
 
 ### Data safety
 - **Atomic writes** — every board save goes to a temp file and is `os.replace`d into position.
@@ -224,7 +273,7 @@ Three constants in `server.py` are absolute paths on the author's machine and **
 
 `DSH_NODE` is discovered automatically from a candidate list and `node` on `PATH`.
 
-Models are restricted to a server-side allow-list: `space-bunny-free`, `deepseek-flash`, `deepseek-v4-flash`, `deepseek-v4.1-flash`, `deepseek-v4-flash-vision`, `deepseek-v4-flash-vision-experience`. A per-project model lock can additionally be enforced through a `--patch` overlay, so a member cannot quietly switch to an expensive model.
+Models are restricted to a server-side allow-list: `space-bunny-free`, `deepseek-flash`, `deepseek-v4.1-flash`. The list is the intersection of that allow-list and what the member's profile actually configures, so a model the provider never set up cannot be selected — it used to spin for 180 seconds and look like a dead agent. A per-project model lock can additionally be enforced through a `--patch` overlay, so a member cannot quietly switch to an expensive model.
 
 Logs for the hosted engine go to `/tmp/dsh_server.log` (override with `AGENTNEXUS_DSH_LOG`).
 
